@@ -1,0 +1,80 @@
+# ---------------------------------------------------------------------------
+# Model weights and everything the app generates at runtime
+# ---------------------------------------------------------------------------
+# LLM_MODELS_DIR (default "models/") holds downloaded weights, chat.db,
+# installed.json, uploads/ and sd-outputs/. Matches docker/models/ too.
+models/
+third_party/
+
+# Weight / checkpoint formats, wherever they land
+*.gguf
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.onnx
+*.h5
+*.msgpack
+
+# Generated images and video
+sd-outputs/
+outputs/
+
+# User uploads
+uploads/
+
+# SQLite chat store (LLM_CHAT_DB)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# ---------------------------------------------------------------------------
+# Runtime state written by webui.sh / bootstrap_install.sh
+# ---------------------------------------------------------------------------
+*.log
+*.pid
+.webui.pid
+.sdworker.pid
+.bootstrap_session
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---------------------------------------------------------------------------
+# Caches
+# ---------------------------------------------------------------------------
+.hf-cache/
+.cache/
+
+# ---------------------------------------------------------------------------
+# Secrets and local config
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ---------------------------------------------------------------------------
+# OS and editor
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

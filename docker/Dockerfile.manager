@@ -1,0 +1,18 @@
+# Dockerfile.manager — FastAPI chat app + status/control panel.
+FROM python:3.11-slim
+
+ENV PIP_NO_CACHE_DIR=1 LLM_MODELS_DIR=/app/models
+WORKDIR /app
+
+# `requests` powers the OpenAI-compatible chat proxy; chat history is sqlite3
+# (stdlib). Point the app at a reachable /v1 endpoint via the in-app settings.
+RUN pip install --upgrade pip && \
+    pip install "fastapi==0.115.*" "uvicorn[standard]==0.32.*" \
+                "requests==2.*" "psutil==6.*" "pynvml==11.*"
+
+COPY installer/ /app/installer/
+COPY webui/ /app/webui/
+COPY models_manifest.json /app/
+
+EXPOSE 8090
+CMD ["uvicorn", "webui.app:app", "--host", "0.0.0.0", "--port", "8090"]

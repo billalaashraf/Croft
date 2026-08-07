@@ -1,0 +1,102 @@
+# docker-compose.yml — Local LLM Chat stack.
+#
+# Services:
+#   text-tgi   : Hugging Face Text Generation Inference (high-perf GPU server)
+#   text-webui : text-generation-webui (friendly GUI + OpenAI-compatible API)
+#   sd-webui   : AUTOMATIC1111 Stable Diffusion web UI (image + ControlNet/LoRA)
+#   manager    : the FastAPI status/control panel (webui/app.py)
+#
+# GPUs are exposed via the NVIDIA Container Toolkit (`deploy.resources` +
+# `runtime: nvidia`). On CPU-only hosts, comment out the `deploy` blocks and use
+# the `text-llamacpp` service instead.
+#
+# Start everything:      docker compose up -d
+# Start one service:     docker compose up -d text-tgi
+# Models live in the shared ./models volume (host-mounted, survives restarts).
+
+x-gpu: &gpu
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+
+services:
+  # --- High-performance text server (GPU) ---
+  text-tgi:
+    image: ghcr.io/huggingface/text-generation-inference:2.4.0
+    <<: *gpu
+    environment:
+      - MODEL_ID=${TEXT_MODEL_ID:-mistralai/Mistral-7B-Instruct-v0.2}
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+      - MAX_INPUT_TOKENS=4096
+      - MAX_TOTAL_TOKENS=8192
+      - QUANTIZE=${TGI_QUANTIZE:-}          # e.g. awq / gptq / bitsandbytes-nf4
+    volumes:
+      - ../models:/data
+    ports:
+      - "8081:80"
+    shm_size: "1g"
+    restart: unless-stopped
+    profiles: ["text", "gpu"]
+
+  # --- CPU-only text server (llama.cpp, GGUF) ---
+  text-llamacpp:
+    image: ghcr.io/ggerganov/llama.cpp:server
+    command: >
+      -m /models/${GGUF_FILE:-mistral-7b-q4/mistral-7b-instruct-v0.2.Q4_K_M.gguf}
+      -c 4096 --host 0.0.0.0 --port 8080
+    volumes:
+      - ../models:/models
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    profiles: ["text", "cpu"]
+
+  # --- Friendly text GUI + API ---
+  text-webui:
+    image: atinoda/text-generation-webui:default
+    <<: *gpu
+    environment:
+      - EXTRA_LAUNCH_ARGS=--listen --api --model ${TEXT_MODEL_ID:-}
+    volumes:
+      - ../models:/app/models
+    ports:
+      - "7860:7860"   # UI
+      - "5000:5000"   # OpenAI-compatible API
+    restart: unless-stopped
+    profiles: ["text-gui", "gpu"]
+
+  # --- Stable Diffusion web UI (images) ---
+  sd-webui:
+    image: universonic/stable-diffusion-webui:latest
+    <<: *gpu
+    environment:
+      - CLI_ARGS=--listen --api --xformers --enable-insecure-extension-access
+    volumes:
+      - ../models/stable-diffusion:/app/stable-diffusion-webui/models/Stable-diffusion
+      - ../models/sd-outputs:/app/stable-diffusion-webui/outputs
+    ports:
+      - "7861:7860"
+    restart: unless-stopped
+    profiles: ["image", "gpu"]
+
+  # --- Management / status panel ---
+  manager:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.manager
+    environment:
+      - LLM_MODELS_DIR=/app/models
+    volumes:
+      - ../models:/app/models
+      - /var/run/docker.sock:/var/run/docker.sock   # read compose status
+    ports:
+      - "8090:8090"
+    restart: unless-stopped
+    profiles: ["manager"]
+
+volumes:
+  models:

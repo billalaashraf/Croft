@@ -1,0 +1,849 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Local LLM Chat</title>
+<style>
+:root{
+  --bg:#f6f3ec; --surface:#fffdf8; --surface-2:#efeadf; --ink:#211d16;
+  --muted:#6c6454; --border:rgba(33,29,22,.10); --border-strong:rgba(33,29,22,.16);
+  --accent:#9a5a22; --accent-soft:rgba(154,90,34,.10); --accent-ink:#fff;
+  --user-bg:#ece6d8; --danger:#a23b2c;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#161309; --surface:#1e1a12; --surface-2:#262016; --ink:#ece6da;
+    --muted:#9c9280; --border:rgba(236,230,218,.10); --border-strong:rgba(236,230,218,.18);
+    --accent:#d98a4a; --accent-soft:rgba(217,138,74,.14); --accent-ink:#1a140c;
+    --user-bg:#2a2318; --danger:#e08b6f;
+  }
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+  font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;cursor:pointer;background:none;border:none}
+input,textarea,select{font:inherit;color:inherit}
+[hidden]{display:none!important}   /* beat ID display rules on the view/side toggles */
+.app{display:grid;grid-template-columns:264px 1fr;height:100vh;overflow:hidden}
+
+/* ---------- Sidebar ---------- */
+.side{background:var(--surface);border-right:1px solid var(--border);
+  display:flex;flex-direction:column;min-height:0}
+.brand{display:flex;align-items:center;gap:9px;padding:16px 16px 4px}
+.brand .mark{width:22px;height:22px;flex:0 0 auto}
+.brand b{font-size:15px;letter-spacing:-.01em}
+.brand span{color:var(--muted);font-size:12px;font-family:var(--mono)}
+.modeswitch{display:flex;gap:4px;margin:10px 12px 6px;background:var(--surface-2);
+  border:1px solid var(--border);border-radius:10px;padding:3px}
+.modeswitch button{flex:1;padding:6px 0;border-radius:7px;font-size:13px;color:var(--muted);
+  transition:background .12s,color .12s}
+.modeswitch button.on{background:var(--surface);color:var(--ink)}
+.newchat{margin:4px 12px 10px;padding:9px 12px;border:1px solid var(--border-strong);
+  border-radius:9px;display:flex;align-items:center;gap:8px;width:calc(100% - 24px);
+  background:var(--surface-2);transition:border-color .15s,background .15s}
+.newchat:hover{border-color:var(--accent);background:var(--accent-soft)}
+.newchat svg{width:16px;height:16px}
+.convs{flex:1;overflow-y:auto;padding:4px 8px 8px}
+.conv{padding:8px 10px;border-radius:8px;cursor:pointer;position:relative;
+  border:1px solid transparent}
+.conv:hover{background:var(--surface-2)}
+.conv.active{background:var(--surface-2);border-color:var(--border)}
+.conv .t{font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:20px}
+.conv .m{display:flex;gap:6px;align-items:center;margin-top:3px;color:var(--muted);
+  font-size:11px;font-family:var(--mono)}
+.conv .del{position:absolute;top:7px;right:6px;opacity:0;padding:3px;border-radius:6px;
+  color:var(--muted);transition:opacity .12s,color .12s}
+.conv:hover .del{opacity:1}
+.conv .del:hover{color:var(--danger);background:var(--bg)}
+.conv .del svg{width:14px;height:14px;display:block}
+.side .empty{color:var(--muted);font-size:12.5px;padding:14px 12px;line-height:1.5}
+#chatSide,#imageSide{flex:1;display:flex;flex-direction:column;min-height:0}
+.gs{display:block;border-radius:8px;overflow:hidden;border:1px solid var(--border);
+  margin-bottom:8px;cursor:pointer;position:relative}
+.gs img{width:100%;display:block;aspect-ratio:1;object-fit:cover}
+.gs .p{position:absolute;left:0;right:0;bottom:0;padding:4px 7px;font-size:10.5px;
+  color:#fff;background:linear-gradient(transparent,rgba(0,0,0,.6));
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.foot{border-top:1px solid var(--border);padding:10px 14px;display:flex;
+  align-items:center;justify-content:space-between;font-size:11.5px;color:var(--muted);font-family:var(--mono)}
+.foot a{color:var(--muted);text-decoration:none;border-bottom:1px solid var(--border-strong)}
+.foot a:hover{color:var(--ink)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--muted);display:inline-block}
+.dot.ok{background:#4f9d5b}
+
+/* ---------- Main ---------- */
+.main{display:flex;flex-direction:column;min-height:0;min-width:0}
+#chatView,#imageView{display:flex;flex-direction:column;min-height:0;height:100%}
+.top{display:flex;align-items:center;gap:12px;padding:12px 20px;
+  border-bottom:1px solid var(--border);background:var(--surface)}
+.top .title{font-size:14px;font-weight:600;flex:1;min-width:0;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.sel{display:flex;align-items:center;gap:6px}
+.sel label{font-size:11px;color:var(--muted);font-family:var(--mono)}
+select.pick{background:var(--surface-2);border:1px solid var(--border-strong);
+  border-radius:8px;padding:6px 26px 6px 10px;font-size:13px;appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='7' viewBox='0 0 10 7'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23888' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 9px center;cursor:pointer}
+select.pick:focus{outline:none;border-color:var(--accent)}
+.chip{font-family:var(--mono);font-size:11px;color:var(--muted);
+  border:1px solid var(--border-strong);border-radius:6px;padding:3px 8px}
+.iconbtn{padding:7px;border-radius:8px;color:var(--muted);border:1px solid transparent}
+.iconbtn:hover{color:var(--ink);background:var(--surface-2)}
+.iconbtn svg{width:17px;height:17px;display:block}
+
+/* ---------- Thread / stage ---------- */
+.thread{flex:1;overflow-y:auto;padding:24px 0}
+.wrap{max-width:760px;margin:0 auto;padding:0 24px}
+#imgStage .wrap{max-width:860px}
+.msg{display:flex;gap:14px;padding:14px 0}
+.msg .av{width:26px;height:26px;flex:0 0 auto;border-radius:7px;display:grid;
+  place-items:center;font-family:var(--mono);font-size:11px;font-weight:600;margin-top:1px}
+.msg.user .av{background:var(--user-bg);color:var(--ink)}
+.msg.assistant .av{background:var(--accent-soft);color:var(--accent)}
+.msg .body{min-width:0;flex:1}
+.msg .who{font-size:11px;color:var(--muted);font-family:var(--mono);margin-bottom:3px}
+.msg .content{white-space:pre-wrap;word-wrap:break-word}
+.msg .content p{margin:0 0 .6em}
+.msg .content p:last-child{margin-bottom:0}
+.msg .content code{font-family:var(--mono);font-size:.86em;background:var(--surface-2);
+  padding:.1em .35em;border-radius:5px}
+.msg .content pre{background:var(--surface-2);border:1px solid var(--border);
+  border-radius:9px;padding:12px 14px;overflow-x:auto;margin:.5em 0}
+.msg .content pre code{background:none;padding:0;font-size:.85em;line-height:1.5}
+.msg .content strong{font-weight:650}
+.caret{display:inline-block;width:7px;height:1.05em;background:var(--accent);
+  vertical-align:-2px;border-radius:1px;animation:blink 1s steps(2,start) infinite}
+@keyframes blink{50%{opacity:0}}
+.think{display:inline-flex;gap:4px;align-items:center;color:var(--muted)}
+.think i{width:5px;height:5px;border-radius:50%;background:currentColor;animation:bounce 1.2s ease-in-out infinite}
+.think i:nth-child(2){animation-delay:.16s} .think i:nth-child(3){animation-delay:.32s}
+@keyframes bounce{0%,80%,100%{transform:translateY(0);opacity:.5}40%{transform:translateY(-4px);opacity:1}}
+.err{color:var(--danger);font-size:13px;font-family:var(--mono);
+  border:1px solid var(--danger);border-radius:8px;padding:8px 11px;margin-top:6px}
+
+/* ---------- Image stage / gallery ---------- */
+.stage-img{display:block;max-width:100%;border-radius:12px;border:1px solid var(--border)}
+.stage-meta{color:var(--muted);font-size:12.5px;margin-top:9px;font-family:var(--mono);line-height:1.6}
+.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:22px}
+.gal{position:relative;border-radius:10px;overflow:hidden;border:1px solid var(--border);
+  cursor:pointer;background:var(--surface-2);aspect-ratio:1}
+.gal img,.gal video{width:100%;height:100%;object-fit:cover;display:block;background:#000}
+.gs video{width:100%;display:block;aspect-ratio:1;object-fit:cover;background:#000}
+.stage-vid{display:block;max-width:100%;border-radius:12px;border:1px solid var(--border);background:#000}
+.gal .del{position:absolute;top:6px;right:6px;background:var(--bg);border-radius:6px;padding:3px;
+  opacity:0;color:var(--muted);transition:opacity .12s,color .12s}
+.gal:hover .del{opacity:.95}
+.gal .del:hover{color:var(--danger)}
+.gal .del svg{width:14px;height:14px;display:block}
+.spin{width:28px;height:28px;border:3px solid var(--border-strong);border-top-color:var(--accent);
+  border-radius:50%;animation:spin 1s linear infinite;margin:46px auto 14px}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ---------- Welcome ---------- */
+.welcome{max-width:560px;margin:0 auto;padding:8vh 24px 2vh;text-align:left}
+.welcome h1{font-size:26px;letter-spacing:-.02em;margin:0 0 8px}
+.welcome p{color:var(--muted);margin:0 0 22px}
+.starter{display:flex;flex-wrap:wrap;gap:8px}
+.starter button{border:1px solid var(--border-strong);border-radius:9px;padding:9px 13px;
+  font-size:13px;background:var(--surface);transition:border-color .15s,background .15s}
+.starter button:hover{border-color:var(--accent);background:var(--accent-soft)}
+.banner{max-width:760px;margin:0 auto 4px;padding:10px 14px;border:1px solid var(--border-strong);
+  border-radius:9px;background:var(--surface-2);color:var(--muted);font-size:12.5px;
+  display:flex;gap:8px;align-items:flex-start}
+.banner code{font-family:var(--mono);color:var(--ink)}
+
+/* ---------- Composer ---------- */
+.composer{padding:12px 24px 18px;background:var(--bg)}
+.cbox{max-width:760px;margin:0 auto;display:flex;align-items:flex-end;gap:10px;
+  background:var(--surface);border:1px solid var(--border-strong);border-radius:14px;
+  padding:8px 8px 8px 14px;transition:border-color .15s}
+.cbox:focus-within{border-color:var(--accent)}
+.cbox textarea{flex:1;border:none;background:none;resize:none;max-height:180px;padding:6px 0;line-height:1.5;outline:none}
+.send{flex:0 0 auto;width:36px;height:36px;border-radius:10px;background:var(--accent);
+  color:var(--accent-ink);display:grid;place-items:center;transition:background .15s,transform .06s}
+.send:disabled{background:var(--surface-2);color:var(--muted);cursor:not-allowed}
+.send:not(:disabled):active{transform:scale(.94)}
+.send svg{width:18px;height:18px}
+.hint{color:var(--muted);font-size:11px;font-family:var(--mono)}
+/* Sits beside the frames field to state the model's own ceiling. */
+.cap{opacity:.62;margin-left:5px}
+.chat-hint{max-width:760px;margin:7px auto 0;text-align:center}
+.imgopts{max-width:760px;margin:9px auto 0;display:flex;gap:18px;align-items:center;
+  font-size:12px;color:var(--muted);font-family:var(--mono)}
+.imgopts select,.imgopts input{background:var(--surface-2);border:1px solid var(--border-strong);
+  border-radius:7px;padding:4px 8px;margin-left:6px;color:var(--ink)}
+.imgopts select:focus,.imgopts input:focus{outline:none;border-color:var(--accent)}
+.imgopts input{width:56px}
+
+/* ---------- Modal ---------- */
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;align-items:center;
+  justify-content:center;padding:24px;z-index:20}
+.scrim.open{display:flex}
+.modal{background:var(--surface);border:1px solid var(--border-strong);border-radius:14px;
+  width:100%;max-width:520px;max-height:82vh;overflow-y:auto;padding:20px 22px}
+.modal h2{margin:0 0 4px;font-size:16px}
+.modal p{margin:0 0 16px;color:var(--muted);font-size:13px}
+.field{margin-bottom:14px}
+.field label{display:block;font-size:12px;color:var(--muted);font-family:var(--mono);margin-bottom:5px}
+.field label b{color:var(--ink);font-weight:600}
+.field input{width:100%;background:var(--bg);border:1px solid var(--border-strong);
+  border-radius:8px;padding:8px 11px;font-size:13px;font-family:var(--mono)}
+.field input:focus{outline:none;border-color:var(--accent)}
+.actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
+.btn{padding:8px 16px;border-radius:9px;font-size:13px;border:1px solid var(--border-strong)}
+.btn:hover{background:var(--surface-2)}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+/* ---------- Attachments ---------- */
+.attachrow{max-width:760px;margin:0 auto 8px;display:flex;flex-wrap:wrap;gap:8px}
+.attachrow:empty{display:none}
+.fchip{display:inline-flex;align-items:center;gap:7px;background:var(--surface-2);
+  border:1px solid var(--border-strong);border-radius:9px;padding:5px 8px 5px 10px;font-size:12.5px}
+.fchip .fx{color:var(--muted);font-family:var(--mono);font-size:10.5px}
+.fchip svg{width:13px;height:13px;color:var(--muted)}
+.fchip button{color:var(--muted);padding:1px;display:flex}
+.fchip button:hover{color:var(--danger)}
+.fchip.bad{border-color:var(--danger)}
+.fchip.bad,.fchip.bad .fx,.fchip.bad svg{color:var(--danger)}
+.attach{flex:0 0 auto;width:32px;height:32px;border-radius:9px;color:var(--muted);
+  display:grid;place-items:center;align-self:flex-end;margin-bottom:2px;transition:color .15s,background .15s}
+.attach:hover{color:var(--accent);background:var(--surface-2)}
+.attach svg{width:18px;height:18px}
+.cbox.drag{border-color:var(--accent);background:var(--accent-soft)}
+.msg .atts{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}
+.msg .att{display:inline-flex;align-items:center;gap:6px;background:var(--surface-2);
+  border:1px solid var(--border);border-radius:8px;padding:4px 9px;font-size:12px;
+  color:var(--ink);text-decoration:none}
+.msg .att:hover{border-color:var(--accent)}
+.msg .att svg{width:13px;height:13px;color:var(--muted);flex:0 0 auto}
+@media (max-width:720px){.app{grid-template-columns:1fr}.side{display:none}}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- Sidebar -->
+  <aside class="side">
+    <div class="brand">
+      <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="2.5" y="4.5" width="19" height="13" rx="3.2" stroke="var(--accent)" stroke-width="1.7"/>
+        <path d="M7.5 21l2.6-3.5M16.5 21l-2.6-3.5" stroke="var(--accent)" stroke-width="1.7" stroke-linecap="round"/>
+        <circle cx="8.5" cy="11" r="1.15" fill="var(--accent)"/>
+        <circle cx="15.5" cy="11" r="1.15" fill="var(--accent)"/>
+      </svg>
+      <div><b>Local LLM</b> <span>studio</span></div>
+    </div>
+
+    <div class="modeswitch" id="modeSwitch">
+      <button data-mode="chat" class="on">Chat</button>
+      <button data-mode="image">Images</button>
+      <button data-mode="video">Video</button>
+    </div>
+
+    <div id="chatSide">
+      <button class="newchat" id="newChat">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        New chat
+      </button>
+      <div class="convs" id="convs"></div>
+    </div>
+
+    <div id="imageSide" hidden>
+      <div class="convs" id="gallerySide"></div>
+    </div>
+
+    <div id="videoSide" hidden>
+      <div class="convs" id="videoSideList"></div>
+    </div>
+
+    <div class="foot">
+      <span><span class="dot" id="engineDot"></span> <span id="engineTxt">engine</span></span>
+      <a href="/manager" target="_blank">System</a>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <section class="main">
+    <!-- Chat view -->
+    <div id="chatView">
+      <div class="top">
+        <div class="title" id="convTitle">Local LLM Chat</div>
+        <div class="sel"><label for="modelPick">model</label><select class="pick" id="modelPick"></select></div>
+        <div class="sel"><label for="taskPick">task</label><select class="pick" id="taskPick"></select></div>
+        <button class="iconbtn" id="openSettings" title="Endpoints & settings" aria-label="Settings">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M4 7h10M18 7h2M4 17h2M10 17h10" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="16" cy="7" r="2.3" stroke="currentColor" stroke-width="1.7"/><circle cx="8" cy="17" r="2.3" stroke="currentColor" stroke-width="1.7"/></svg>
+        </button>
+      </div>
+      <div class="thread" id="thread"></div>
+      <div class="composer">
+        <div id="attachRow" class="attachrow"></div>
+        <div class="cbox">
+          <button class="attach" id="attachBtn" aria-label="Attach a file" title="Attach a file to analyse">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M20 11.5l-8 8a5 5 0 01-7-7l8.5-8.5a3.2 3.2 0 014.5 4.5L9 12.5a1.4 1.4 0 01-2-2l7-7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <textarea id="input" rows="1" placeholder="Message your local model…"></textarea>
+          <button class="send" id="send" aria-label="Send" disabled>
+            <svg viewBox="0 0 24 24" fill="none"><path d="M12 20V6M6 12l6-6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+        <div class="hint chat-hint">Enter to send · Shift+Enter for a new line · attach a file to analyse it</div>
+      </div>
+      <input type="file" id="fileInput" multiple hidden>
+    </div>
+
+    <!-- Image view -->
+    <div id="imageView" hidden>
+      <div class="top">
+        <div class="title">Images</div>
+        <div class="sel"><label for="imgModel">model</label><select class="pick" id="imgModel"></select></div>
+        <span class="chip" id="imgDevice">engine</span>
+      </div>
+      <div class="thread" id="imgStage"></div>
+      <div class="composer">
+        <div class="cbox">
+          <textarea id="imgPrompt" rows="1" placeholder="Describe an image to generate…"></textarea>
+          <button class="send" id="imgGen" aria-label="Generate" disabled>
+            <svg viewBox="0 0 24 24" fill="none"><path d="M4 16l4.5-5 3 3.2L16 8l4 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="8.5" cy="7.5" r="1.5" fill="currentColor"/></svg>
+          </button>
+        </div>
+        <div class="imgopts">
+          <label>size <select id="imgSize"><option>512</option><option>768</option><option>1024</option></select></label>
+          <label>steps <input id="imgSteps" type="number" min="1" max="60" value="4"></label>
+          <span class="hint" id="imgHint">Enter to generate</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Video view -->
+    <div id="videoView" hidden>
+      <div class="top">
+        <div class="title">Video</div>
+        <div class="sel"><label for="vidModel">model</label><select class="pick" id="vidModel"></select></div>
+        <span class="chip" id="vidDevice">engine</span>
+      </div>
+      <div class="thread" id="vidStage"></div>
+      <div class="composer">
+        <div id="vidSrcRow" class="attachrow"></div>
+        <div class="cbox">
+          <button class="attach" id="vidImgBtn" aria-label="Source image" title="Choose a source image (image-to-video)" hidden>
+            <svg viewBox="0 0 24 24" fill="none"><path d="M4 16l4.5-5 3 3.2L16 8l4 6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><circle cx="8.5" cy="7.5" r="1.5" fill="currentColor"/></svg>
+          </button>
+          <textarea id="vidPrompt" rows="1" placeholder="Describe a video to generate…"></textarea>
+          <button class="send" id="vidGen" aria-label="Generate" disabled>
+            <svg viewBox="0 0 24 24" fill="none"><path d="M4 6.5A1.5 1.5 0 015.5 5h8A1.5 1.5 0 0115 6.5v11A1.5 1.5 0 0113.5 19h-8A1.5 1.5 0 014 17.5z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M19 9l1.4-.8a.6.6 0 01.9.5v6.6a.6.6 0 01-.9.5L19 15" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+        <div class="imgopts">
+          <label>frames <input id="vidFrames" type="number" min="1" max="32" value="16"><span class="cap" id="vidFramesCap"></span></label>
+          <label>fps <input id="vidFps" type="number" min="4" max="30" value="8"></label>
+          <label>steps <input id="vidSteps" type="number" min="1" max="60" value="20"></label>
+          <span class="hint" id="vidHint">Enter to generate</span>
+        </div>
+      </div>
+      <input type="file" id="vidImgInput" accept="image/*" hidden>
+    </div>
+  </section>
+</div>
+
+<!-- Settings modal -->
+<div class="scrim" id="scrim">
+  <div class="modal">
+    <h2>Model endpoints</h2>
+    <p>Chat runs on a separate server, so its memory is released between replies.
+       Ollama is used automatically when it&rsquo;s running; point a model at any
+       other OpenAI-compatible server below, or set one default.</p>
+    <div class="field">
+      <label for="defEndpoint">Default endpoint <b>(all models)</b></label>
+      <input id="defEndpoint" placeholder="http://127.0.0.1:8080/v1" spellcheck="false">
+    </div>
+    <div id="modelRows"></div>
+    <div class="actions">
+      <button class="btn" id="closeSettings">Cancel</button>
+      <button class="btn primary" id="saveSettings">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const api = (u,o) => fetch(u,o).then(r=>r.json());
+const esc = s => (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function md(t){
+  t = esc(t);
+  const blocks = [];
+  t = t.replace(/```(\w*)\n?([\s\S]*?)```/g,(_,lang,code)=>{
+    blocks.push('<pre><code>'+code.replace(/\n$/,'')+'</code></pre>'); return ' '+(blocks.length-1)+' ';
+  });
+  t = t.replace(/`([^`\n]+)`/g,'<code>$1</code>');
+  t = t.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
+  t = t.split(/\n{2,}/).map(p=>{
+    const m = p.match(/^ (\d+) $/);
+    return m ? blocks[+m[1]] : '<p>'+p.replace(/\n/g,'<br>')+'</p>';
+  }).join('');
+  return t.replace(/ (\d+) /g,(_,i)=> blocks[+i]!==undefined ? blocks[+i] : ' '+i+' ');
+}
+function relTime(ts){
+  const s=(Date.now()/1000)-ts;
+  if(s<60)return 'now'; if(s<3600)return Math.floor(s/60)+'m';
+  if(s<86400)return Math.floor(s/3600)+'h'; if(s<604800)return Math.floor(s/86400)+'d';
+  return new Date(ts*1000).toLocaleDateString();
+}
+
+const state = {mode:'chat', models:[], presets:[], convos:[], current:null, streaming:false,
+               meta:null, imageModels:null, images:[], imgDeps:false, imgDevice:'', pending:[],
+               videoModels:null, videos:[], vidDeps:false, vidDevice:'', vidSource:null, vidBusy:false};
+
+async function boot(){
+  state.meta = await api('/api/models');
+  state.models = state.meta.models; state.presets = state.meta.presets;
+  fillModelPick(); fillTaskPick(); fillEngine();
+  await refreshConvos();
+  renderThread();
+}
+
+/* ---------------- Chat ---------------- */
+function readyModels(){ return state.models.filter(m=>m.chat_capable); }
+function fillEngine(){
+  const anyReady = state.models.some(m=>m.ready);
+  $('#engineDot').className = 'dot' + (anyReady?' ok':'');
+  $('#engineTxt').textContent = state.meta.llama_cpp ? 'llama.cpp ready'
+      : (anyReady ? 'endpoint ready' : 'no engine');
+}
+function fillModelPick(){
+  const sel=$('#modelPick'); sel.innerHTML='';
+  const ms = readyModels();
+  if(!ms.length){ sel.innerHTML='<option>no text models</option>'; sel.disabled=true; return; }
+  sel.disabled=false;
+  ms.forEach(m=>{ const o=document.createElement('option'); o.value=m.id;
+    o.textContent = m.id + (m.ready?'':'  · setup needed'); sel.appendChild(o); });
+}
+function fillTaskPick(){
+  const sel=$('#taskPick'); sel.innerHTML='';
+  state.presets.forEach(p=>{ const o=document.createElement('option'); o.value=p.id; o.textContent=p.label; sel.appendChild(o); });
+}
+async function refreshConvos(){ const r = await api('/api/conversations'); state.convos = r.conversations; renderConvos(); }
+function renderConvos(){
+  const box=$('#convs'); box.innerHTML='';
+  if(!state.convos.length){ box.innerHTML='<div class="empty">No conversations yet. Your chats will appear here.</div>'; return; }
+  state.convos.forEach(c=>{
+    const d=document.createElement('div');
+    d.className='conv'+(state.current&&state.current.id===c.id?' active':'');
+    d.innerHTML=`<div class="t">${esc(c.title)}</div>
+      <div class="m"><span>${esc(c.model_id||'—')}</span>·<span>${relTime(c.updated_at)}</span><span>${c.message_count} msg</span></div>
+      <button class="del" title="Delete" aria-label="Delete chat">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`;
+    d.onclick=()=>openConv(c.id);
+    d.querySelector('.del').onclick=e=>{e.stopPropagation();delConv(c.id);};
+    box.appendChild(d);
+  });
+}
+async function openConv(id){
+  const r = await api('/api/conversations/'+id); if(r.error) return;
+  state.current = r.conversation; state.current.messages = r.messages;
+  if(state.current.model_id) $('#modelPick').value=state.current.model_id;
+  if(state.current.task) $('#taskPick').value=state.current.task;
+  $('#convTitle').textContent = state.current.title;
+  renderConvos(); renderThread();
+}
+async function delConv(id){
+  await fetch('/api/conversations/'+id,{method:'DELETE'});
+  if(state.current&&state.current.id===id){ state.current=null; $('#convTitle').textContent='Local LLM Chat'; }
+  await refreshConvos(); renderThread();
+}
+function newChat(){ state.current=null; state.pending=[]; renderPending(); $('#convTitle').textContent='New chat'; renderConvos(); renderThread(); $('#input').focus(); }
+
+function renderThread(){
+  const t=$('#thread');
+  if(!state.current || !state.current.messages || !state.current.messages.length){
+    const ready = readyModels().some(m=>m.ready);
+    const warn = ready ? '' :
+      `<div class="banner"><span>⚠</span><div>No runnable model yet. Install a text model,
+        run <code>pip install llama-cpp-python</code>, or set an endpoint via the settings icon.</div></div>`;
+    t.innerHTML = `<div class="wrap">${warn}<div class="welcome">
+      <h1>Chat with a local model</h1>
+      <p>Everything runs on your machine. Pick a model and a task above, then start typing.
+         Every conversation is saved on the left.</p>
+      <div class="starter">
+        <button data-p="Explain a concept simply">Explain a concept</button>
+        <button data-p="Help me debug this code:\n">Debug some code</button>
+        <button data-p="Draft a short piece about ">Write something</button>
+        <button data-p="Summarize the following:\n">Summarize text</button>
+      </div></div></div>`;
+    t.querySelectorAll('.starter button').forEach(b=>b.onclick=()=>{ $('#input').value=b.dataset.p; sizeInput(); $('#input').focus(); });
+    return;
+  }
+  t.innerHTML='<div class="wrap" id="wrap"></div>';
+  const w=$('#wrap');
+  state.current.messages.forEach(m=>w.appendChild(msgEl(m.role, m.content, m.attachments)));
+  scrollDown();
+}
+function attHtml(atts){
+  if(!atts || !atts.length) return '';
+  return '<div class="atts">'+atts.map(a=>
+    `<a class="att" href="/api/attachment/${a.id}/file" target="_blank" rel="noopener">
+      <svg viewBox="0 0 24 24" fill="none"><path d="M14 3v5h5" stroke="currentColor" stroke-width="1.5"/><path d="M6 3h8l5 5v13H6z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+      ${esc(a.filename)}</a>`).join('')+'</div>';
+}
+function msgEl(role, content, atts){
+  const d=document.createElement('div'); d.className='msg '+role;
+  const who = role==='user' ? 'You' : (state.current&&state.current.model_id||'assistant');
+  d.innerHTML=`<div class="av">${role==='user'?'U':'AI'}</div>
+    <div class="body"><div class="who">${esc(who)}</div>${attHtml(atts)}<div class="content"></div></div>`;
+  d.querySelector('.content').innerHTML = role==='assistant' ? md(content) : esc(content).replace(/\n/g,'<br>');
+  return d;
+}
+function scrollDown(){ const t=$('#thread'); t.scrollTop=t.scrollHeight; }
+
+async function send(){
+  const text=$('#input').value.trim();
+  const atts = state.pending.filter(p=>p.id);              // successfully uploaded
+  if((!text && !atts.length) || state.streaming) return;
+  if(state.pending.some(p=>p.uploading)) return;           // wait for uploads to finish
+  const model=$('#modelPick').value, task=$('#taskPick').value;
+  if(!model || $('#modelPick').disabled){ alert('No model available. Install one or set an endpoint in settings.'); return; }
+  if(!state.current){
+    state.current = await api('/api/conversations',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({model_id:model, task})});
+    state.current.messages=[];
+  }
+  const sentAtts = atts.map(p=>({id:p.id, filename:p.filename}));
+  const attIds = atts.map(p=>p.id);
+  const displayText = text || 'Please analyse the attached file(s).';
+  $('#input').value=''; state.pending=[]; renderPending(); sizeInput();
+  let w=$('#wrap');
+  if(!w){ $('#thread').innerHTML='<div class="wrap" id="wrap"></div>'; w=$('#wrap'); }
+  w.appendChild(msgEl('user', displayText, sentAtts));
+  const aEl = msgEl('assistant',''); w.appendChild(aEl); scrollDown();
+  const contentEl = aEl.querySelector('.content');
+  contentEl.innerHTML='<span class="think"><i></i><i></i><i></i></span>';
+
+  setStreaming(true);
+  let acc='', started=false;
+  try{
+    const resp = await fetch('/api/conversations/'+state.current.id+'/chat',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({content:text, model_id:model, task, attachment_ids:attIds})});
+    const reader = resp.body.getReader(); const dec=new TextDecoder(); let buf='';
+    while(true){
+      const {value,done}=await reader.read(); if(done) break;
+      buf += dec.decode(value,{stream:true});
+      const parts = buf.split('\n\n'); buf = parts.pop();
+      for(const p of parts){
+        const line=p.split('\n').find(l=>l.startsWith('data:')); if(!line) continue;
+        const ev=JSON.parse(line.slice(5).trim());
+        if(ev.type==='delta'){ started=true; acc+=ev.content; contentEl.innerHTML = md(acc)+'<span class="caret"></span>'; scrollDown(); }
+        else if(ev.type==='done'){ contentEl.innerHTML = md(acc); }
+        else if(ev.type==='error'){ contentEl.innerHTML = md(acc) + `<div class="err">${esc(ev.error)}</div>`; }
+      }
+    }
+    if(!started && !acc) contentEl.innerHTML='<div class="err">No response received.</div>';
+  }catch(e){ contentEl.innerHTML = md(acc) + `<div class="err">${esc(e.message||String(e))}</div>`; }
+  finally{
+    setStreaming(false); await refreshConvos();
+    if(state.current){ const c=state.convos.find(x=>x.id===state.current.id);
+      if(c){ state.current.title=c.title; state.current.model_id=c.model_id; $('#convTitle').textContent=c.title; } }
+  }
+}
+function setStreaming(v){ state.streaming=v; updateSendEnabled(); }
+function sizeInput(){ const i=$('#input'); i.style.height='auto'; i.style.height=Math.min(i.scrollHeight,180)+'px';
+  updateSendEnabled(); }
+function updateSendEnabled(){
+  const hasText=!!$('#input').value.trim();
+  const hasAtt=state.pending.some(p=>p.id);
+  const uploading=state.pending.some(p=>p.uploading);
+  $('#send').disabled = state.streaming || uploading || !(hasText||hasAtt);
+}
+
+/* ---- attachments (upload files to analyse) ---- */
+function renderPending(){
+  const row=$('#attachRow'); if(!row) return; row.innerHTML='';
+  state.pending.forEach((p,i)=>{
+    const bad = p.error || p.supported===false;
+    const status = p.uploading ? 'reading…'
+      : (p.error ? 'error' : (p.truncated ? 'truncated' : (p.note || (p.chars?p.chars+' chars':''))));
+    const c=document.createElement('span'); c.className='fchip'+(bad?' bad':'');
+    c.innerHTML=`<svg viewBox="0 0 24 24" fill="none"><path d="M14 3v5h5" stroke="currentColor" stroke-width="1.6"/><path d="M6 3h8l5 5v13H6z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+      <span>${esc(p.filename)}</span>${status?`<span class="fx">${esc(status)}</span>`:''}
+      <button aria-label="Remove"><svg viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>`;
+    c.querySelector('button').onclick=()=>{ state.pending.splice(i,1); renderPending(); updateSendEnabled(); };
+    row.appendChild(c);
+  });
+}
+async function addFiles(fileList){
+  for(const file of fileList){
+    const p={filename:file.name, uploading:true}; state.pending.push(p); renderPending(); updateSendEnabled();
+    try{
+      const fd=new FormData(); fd.append('file', file);
+      const d = await fetch('/api/attach',{method:'POST', body:fd}).then(r=>r.json());
+      p.uploading=false;
+      if(d.error){ p.error=d.error; }
+      else { p.id=d.id; p.kind=d.kind; p.note=d.note; p.supported=d.supported; p.truncated=d.truncated; p.chars=d.chars; }
+    }catch(e){ p.uploading=false; p.error=e.message||'upload failed'; }
+    renderPending(); updateSendEnabled();
+  }
+}
+
+/* ---------------- Settings ---------------- */
+async function openSettings(){
+  const s = await api('/api/settings');
+  $('#defEndpoint').value = s.default_endpoint || '';
+  const box=$('#modelRows'); box.innerHTML='';
+  const det = state.meta.detected_endpoints||[];
+  if(det.length){ const d=document.createElement('p'); d.style.marginTop='4px';
+    d.innerHTML='Detected: '+det.map(e=>`<code>${esc(e.endpoint)}</code>`).join(', '); box.appendChild(d); }
+  state.models.filter(m=>m.chat_capable).forEach(m=>{
+    const row=document.createElement('div'); row.className='field';
+    row.innerHTML=`<label><b>${esc(m.id)}</b> · ${esc(m.detail||'')}</label>
+      <input data-model="${esc(m.id)}" placeholder="use default / ollama" value="${esc(s['endpoint:'+m.id]||'')}" spellcheck="false">`;
+    box.appendChild(row);
+  });
+  $('#scrim').classList.add('open');
+}
+async function saveSettings(){
+  const payload={default_endpoint:$('#defEndpoint').value.trim()};
+  $('#modelRows').querySelectorAll('input[data-model]').forEach(i=>{ payload['endpoint:'+i.dataset.model]= i.value.trim(); });
+  await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  $('#scrim').classList.remove('open');
+  state.meta = await api('/api/models'); state.models=state.meta.models; fillModelPick(); fillEngine();
+}
+async function persistChoice(){
+  if(!state.current) return;
+  await fetch('/api/conversations/'+state.current.id,{method:'PATCH',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({model_id:$('#modelPick').value, task:$('#taskPick').value})});
+}
+
+/* ---------------- Images ---------------- */
+async function bootImages(){
+  const d = await api('/api/image/models');
+  state.imageModels = d.models; state.imgDeps = d.deps; state.imgDevice = d.device;
+  const sel=$('#imgModel'); sel.innerHTML='';
+  if(!d.models.length){ sel.innerHTML='<option>no image models</option>'; sel.disabled=true; }
+  else{ sel.disabled=false; d.models.forEach(m=>{ const o=document.createElement('option'); o.value=m.id;
+    o.textContent=m.id+(m.ready?'':'  · setup needed'); sel.appendChild(o); }); }
+  $('#imgDevice').textContent = d.deps ? d.device : 'no engine';
+  applyImgDefaults();
+}
+function applyImgDefaults(){
+  const m=(state.imageModels||[]).find(x=>x.id===$('#imgModel').value);
+  if(m&&m.defaults){ $('#imgSize').value=String(m.defaults.width); $('#imgSteps').value=m.defaults.steps; }
+}
+async function loadImageHistory(){ const d = await api('/api/image/history'); state.images=d.images; renderGallery(); }
+function renderGallery(){
+  const imgs=state.images||[];
+  const side=$('#gallerySide');
+  side.innerHTML = imgs.length ? '' : '<div class="empty">No images yet. Your generations will appear here.</div>';
+  imgs.slice(0,40).forEach(im=>{ const a=document.createElement('div'); a.className='gs';
+    a.innerHTML=`<img src="${im.url}" alt=""><span class="p">${esc(im.prompt)}</span>`;
+    a.onclick=()=>showImage(im); side.appendChild(a); });
+  const g=$('#galleryGrid');
+  if(g){ g.innerHTML='';
+    imgs.forEach(im=>{ const d=document.createElement('div'); d.className='gal';
+      d.innerHTML=`<img src="${im.url}" alt="${esc(im.prompt)}"><button class="del" aria-label="Delete image">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`;
+      d.querySelector('img').onclick=()=>showImage(im);
+      d.querySelector('.del').onclick=e=>{e.stopPropagation();delImage(im.id);};
+      g.appendChild(d); });
+  }
+}
+function imageStageEmpty(){
+  const ready=(state.imageModels||[]).some(m=>m.ready);
+  const warn = ready?'':`<div class="banner"><span>⚠</span><div>Image generation needs the diffusers engine.
+    Run <code>pip install torch diffusers safetensors accelerate</code>, then restart the app.</div></div>`;
+  $('#imgStage').innerHTML=`<div class="wrap">${warn}<div class="welcome">
+    <h1>Generate an image</h1>
+    <p>Describe what you want, pick a model, and press generate. Results are saved below and on the left.</p>
+    </div><div class="gallery" id="galleryGrid"></div></div>`;
+  renderGallery();
+}
+function showImage(im){
+  const p=im.params||{};
+  $('#imgStage').innerHTML=`<div class="wrap">
+    <img class="stage-img" src="${im.url}" alt="${esc(im.prompt)}">
+    <div class="stage-meta">${esc(im.prompt)}<br>${esc(im.model_id||'')} · ${p.width||'?'}×${p.height||'?'} · ${p.steps||'?'} steps</div>
+    <div class="gallery" id="galleryGrid"></div></div>`;
+  renderGallery(); $('#imgStage').scrollTop=0;
+}
+async function generateImage(){
+  const model=$('#imgModel').value, prompt=$('#imgPrompt').value.trim();
+  if(!prompt || $('#imgModel').disabled) return;
+  const m=(state.imageModels||[]).find(x=>x.id===model);
+  if(m && !m.ready){ alert(m.detail); return; }
+  $('#imgGen').disabled=true;
+  $('#imgStage').innerHTML='<div class="wrap"><div class="spin"></div><p style="text-align:center;color:var(--muted)">Generating… the first run loads the model, which can take a little while.</p></div>';
+  try{
+    const r = await fetch('/api/image/generate',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({model_id:model, prompt, width:+$('#imgSize').value, height:+$('#imgSize').value, steps:+$('#imgSteps').value})});
+    const d = await r.json();
+    if(d.error){ $('#imgStage').innerHTML=`<div class="wrap"><div class="err">${esc(d.error)}</div><div class="gallery" id="galleryGrid"></div></div>`; renderGallery(); }
+    else { await loadImageHistory(); showImage(d.image); $('#imgPrompt').value=''; sizeImg(); }
+  }catch(e){ $('#imgStage').innerHTML=`<div class="wrap"><div class="err">${esc(e.message||e)}</div></div>`; }
+  finally{ $('#imgGen').disabled=!$('#imgPrompt').value.trim(); }
+}
+async function delImage(id){ await fetch('/api/image/'+id,{method:'DELETE'}); await loadImageHistory(); imageStageEmpty(); }
+function sizeImg(){ const i=$('#imgPrompt'); i.style.height='auto'; i.style.height=Math.min(i.scrollHeight,140)+'px';
+  $('#imgGen').disabled=!i.value.trim(); }
+
+/* ---------------- Video ---------------- */
+async function bootVideos(){
+  const d = await api('/api/video/models');
+  state.videoModels=d.models; state.vidDeps=d.deps; state.vidDevice=d.device;
+  const sel=$('#vidModel'); sel.innerHTML='';
+  if(!d.models.length){ sel.innerHTML='<option>no video models</option>'; sel.disabled=true; }
+  else{ sel.disabled=false; d.models.forEach(m=>{ const o=document.createElement('option'); o.value=m.id;
+    o.textContent=m.id+(m.ready?'':'  · setup needed'); sel.appendChild(o); }); }
+  $('#vidDevice').textContent = d.deps ? d.device : 'no engine';
+  applyVidDefaults();
+}
+function currentVidModel(){ return (state.videoModels||[]).find(x=>x.id===$('#vidModel').value); }
+function applyVidDefaults(){
+  const m=currentVidModel();
+  if(m&&m.defaults){
+    // The ceiling belongs to the model, not the markup: AnimateDiff's motion
+    // weights top out at 32 frames, and a stray 60 used to reach the UNet and
+    // come back as a raw tensor-shape mismatch.
+    const cap=m.defaults.max_frames;
+    if(cap){ $('#vidFrames').max=cap; $('#vidFramesCap').textContent='max '+cap; }
+    $('#vidFrames').value=Math.min(m.defaults.frames, cap||m.defaults.frames);
+    $('#vidFps').value=m.defaults.fps; $('#vidSteps').value=m.defaults.steps;
+  }
+  const img2vid = !!(m && m.video_kind==='img2vid');
+  $('#vidImgBtn').hidden = !img2vid;
+  $('#vidPrompt').placeholder = img2vid ? 'Optional caption (image-to-video)…' : 'Describe a video to generate…';
+  $('#vidHint').textContent = img2vid ? 'Add a source image, then generate' : 'Enter to generate';
+  if(!img2vid){ state.vidSource=null; }
+  renderVidSource(); updateVidSend();
+}
+function renderVidSource(){
+  const row=$('#vidSrcRow'); if(!row) return; row.innerHTML='';
+  const p=state.vidSource; if(!p) return;
+  const c=document.createElement('span'); c.className='fchip'+(p.error?' bad':'');
+  c.innerHTML=`<svg viewBox="0 0 24 24" fill="none"><path d="M4 16l4.5-5 3 3.2L16 8l4 6" stroke="currentColor" stroke-width="1.6"/><circle cx="8.5" cy="7.5" r="1.4" fill="currentColor"/></svg>
+    <span>${esc(p.filename)}</span>${p.uploading?'<span class="fx">reading…</span>':(p.error?`<span class="fx">${esc(p.error)}</span>`:'')}
+    <button aria-label="Remove"><svg viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>`;
+  c.querySelector('button').onclick=()=>{ state.vidSource=null; renderVidSource(); updateVidSend(); };
+  row.appendChild(c);
+}
+async function addVidSource(file){
+  const p={filename:file.name, uploading:true}; state.vidSource=p; renderVidSource(); updateVidSend();
+  try{ const fd=new FormData(); fd.append('file',file);
+    const d=await fetch('/api/attach',{method:'POST',body:fd}).then(r=>r.json());
+    p.uploading=false; if(d.error) p.error=d.error; else p.id=d.id;
+  }catch(e){ p.uploading=false; p.error=e.message||'upload failed'; }
+  renderVidSource(); updateVidSend();
+}
+function updateVidSend(){
+  const m=currentVidModel(); const img2vid = !!(m && m.video_kind==='img2vid');
+  const ok = img2vid ? !!(state.vidSource&&state.vidSource.id) : !!$('#vidPrompt').value.trim();
+  $('#vidGen').disabled = state.vidBusy || !ok || $('#vidModel').disabled;
+}
+async function loadVideoHistory(){ const d=await api('/api/video/history'); state.videos=d.videos; renderVideoGallery(); }
+function vidMedia(v){ return v.fmt==='mp4' ? `<video src="${v.url}" muted loop playsinline></video>` : `<img src="${v.url}" alt="">`; }
+function hoverPlay(el){ const v=el.querySelector('video'); if(v){ el.onmouseenter=()=>v.play().catch(()=>{}); el.onmouseleave=()=>v.pause(); } }
+function renderVideoGallery(){
+  const vids=state.videos||[];
+  const side=$('#videoSideList');
+  side.innerHTML = vids.length?'':'<div class="empty">No videos yet. Your clips will appear here.</div>';
+  vids.slice(0,40).forEach(v=>{ const a=document.createElement('div'); a.className='gs';
+    a.innerHTML=vidMedia(v)+`<span class="p">${esc(v.prompt||v.model_id||'clip')}</span>`;
+    a.onclick=()=>showVideo(v); hoverPlay(a); side.appendChild(a); });
+  const g=$('#vidGalleryGrid');
+  if(g){ g.innerHTML='';
+    vids.forEach(v=>{ const d=document.createElement('div'); d.className='gal';
+      d.innerHTML=vidMedia(v)+`<button class="del" aria-label="Delete video"><svg viewBox="0 0 24 24" fill="none"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`;
+      hoverPlay(d);
+      d.querySelector(v.fmt==='mp4'?'video':'img').onclick=()=>showVideo(v);
+      d.querySelector('.del').onclick=e=>{e.stopPropagation();delVideo(v.id);};
+      g.appendChild(d); });
+  }
+}
+function videoStageEmpty(){
+  const ready=(state.videoModels||[]).some(m=>m.ready);
+  const warn = ready?'':`<div class="banner"><span>⚠</span><div>Video generation needs a video model and the diffusers engine.
+    Install one (e.g. <code>animatediff-sd15</code> or <code>svd-xt</code>) and run
+    <code>pip install torch diffusers transformers accelerate imageio imageio-ffmpeg</code>, then restart.</div></div>`;
+  $('#vidStage').innerHTML=`<div class="wrap">${warn}<div class="welcome">
+    <h1>Generate a video</h1>
+    <p>Text-to-video from a prompt, or image-to-video from a source image, depending on the model. Clips are saved below and on the left.</p>
+    </div><div class="gallery" id="vidGalleryGrid"></div></div>`;
+  renderVideoGallery();
+}
+function showVideo(v){
+  const p=v.params||{};
+  const player = v.fmt==='mp4'
+    ? `<video class="stage-vid" src="${v.url}" controls autoplay loop muted playsinline></video>`
+    : `<img class="stage-vid" src="${v.url}" alt="">`;
+  $('#vidStage').innerHTML=`<div class="wrap">${player}
+    <div class="stage-meta">${esc(v.prompt||'')}<br>${esc(v.model_id||'')} · ${p.frames||'?'} frames · ${p.fps||'?'} fps · ${p.steps||'?'} steps</div>
+    <div class="gallery" id="vidGalleryGrid"></div></div>`;
+  renderVideoGallery(); $('#vidStage').scrollTop=0;
+}
+async function generateVideo(){
+  const m=currentVidModel(); if(!m || $('#vidModel').disabled) return;
+  if(!m.ready){ alert(m.detail); return; }
+  const img2vid = m.video_kind==='img2vid';
+  const prompt=$('#vidPrompt').value.trim();
+  if(img2vid && !(state.vidSource&&state.vidSource.id)){ alert('Add a source image for image-to-video.'); return; }
+  if(!img2vid && !prompt){ return; }
+  state.vidBusy=true; updateVidSend();
+  $('#vidStage').innerHTML='<div class="wrap"><div class="spin"></div><p style="text-align:center;color:var(--muted)">Rendering video… the first run loads the model and this can take a while.</p></div>';
+  try{
+    const b={model_id:m.id, prompt, frames:+$('#vidFrames').value, fps:+$('#vidFps').value, steps:+$('#vidSteps').value};
+    if(img2vid) b.source_image_id=state.vidSource.id;
+    const d=await fetch('/api/video/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(r=>r.json());
+    if(d.error){ $('#vidStage').innerHTML=`<div class="wrap"><div class="err">${esc(d.error)}</div><div class="gallery" id="vidGalleryGrid"></div></div>`; renderVideoGallery(); }
+    else { await loadVideoHistory(); showVideo(d.video); $('#vidPrompt').value=''; state.vidSource=null; renderVidSource(); sizeVid(); }
+  }catch(e){ $('#vidStage').innerHTML=`<div class="wrap"><div class="err">${esc(e.message||e)}</div></div>`; }
+  finally{ state.vidBusy=false; updateVidSend(); }
+}
+async function delVideo(id){ await fetch('/api/video/'+id,{method:'DELETE'}); await loadVideoHistory(); videoStageEmpty(); }
+function sizeVid(){ const i=$('#vidPrompt'); i.style.height='auto'; i.style.height=Math.min(i.scrollHeight,140)+'px'; updateVidSend(); }
+
+/* ---------------- Mode switch ---------------- */
+function switchMode(m){
+  state.mode=m;
+  $('#modeSwitch').querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.mode===m));
+  $('#chatView').hidden = m!=='chat';   $('#chatSide').hidden = m!=='chat';
+  $('#imageView').hidden = m!=='image'; $('#imageSide').hidden = m!=='image';
+  $('#videoView').hidden = m!=='video'; $('#videoSide').hidden = m!=='video';
+  if(m==='image'){ (state.imageModels?Promise.resolve():bootImages()).then(()=>{ loadImageHistory(); imageStageEmpty(); }); }
+  if(m==='video'){ (state.videoModels?Promise.resolve():bootVideos()).then(()=>{ loadVideoHistory(); videoStageEmpty(); }); }
+}
+
+/* ---------------- wiring ---------------- */
+$('#modeSwitch').querySelectorAll('button').forEach(b=>b.onclick=()=>switchMode(b.dataset.mode));
+$('#newChat').onclick=newChat;
+$('#send').onclick=send;
+$('#openSettings').onclick=openSettings;
+$('#closeSettings').onclick=()=>$('#scrim').classList.remove('open');
+$('#saveSettings').onclick=saveSettings;
+$('#scrim').onclick=e=>{ if(e.target===$('#scrim')) $('#scrim').classList.remove('open'); };
+$('#modelPick').onchange=persistChoice;
+$('#taskPick').onchange=persistChoice;
+$('#input').addEventListener('input',sizeInput);
+$('#input').addEventListener('keydown',e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); }});
+// attachments: button, file input, drag-and-drop onto the chat view
+$('#attachBtn').onclick=()=>$('#fileInput').click();
+$('#fileInput').addEventListener('change',e=>{ addFiles(e.target.files); e.target.value=''; });
+(function(){
+  const cv=$('#chatView'), box=()=>$('#chatView .cbox');
+  ['dragenter','dragover'].forEach(ev=>cv.addEventListener(ev,e=>{ e.preventDefault(); box()&&box().classList.add('drag'); }));
+  ['dragleave','drop'].forEach(ev=>cv.addEventListener(ev,e=>{ e.preventDefault(); if(ev==='dragleave'&&cv.contains(e.relatedTarget))return; box()&&box().classList.remove('drag'); }));
+  cv.addEventListener('drop',e=>{ if(e.dataTransfer.files&&e.dataTransfer.files.length) addFiles(e.dataTransfer.files); });
+})();
+$('#imgGen').onclick=generateImage;
+$('#imgModel').onchange=applyImgDefaults;
+$('#imgPrompt').addEventListener('input',sizeImg);
+$('#imgPrompt').addEventListener('keydown',e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); generateImage(); }});
+$('#vidGen').onclick=generateVideo;
+$('#vidModel').onchange=applyVidDefaults;
+$('#vidPrompt').addEventListener('input',sizeVid);
+$('#vidPrompt').addEventListener('keydown',e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); generateVideo(); }});
+$('#vidImgBtn').onclick=()=>$('#vidImgInput').click();
+$('#vidImgInput').addEventListener('change',e=>{ if(e.target.files[0]) addVidSource(e.target.files[0]); e.target.value=''; });
+boot();
+</script>
+</body>
+</html>

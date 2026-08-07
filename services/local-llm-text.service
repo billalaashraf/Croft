@@ -1,0 +1,41 @@
+# local-llm-text.service — systemd unit for the text chat server (server mode).
+#
+# Install (user scope, no root):
+#   mkdir -p ~/.config/systemd/user
+#   cp services/local-llm-text.service ~/.config/systemd/user/
+#   # edit WorkingDirectory / ExecStart paths below to match your install
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now local-llm-text.service
+#   loginctl enable-linger "$USER"        # keep running after logout
+#
+# Install (system scope, root):
+#   sudo cp services/local-llm-text.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now local-llm-text.service
+#
+# Manage:
+#   systemctl --user status  local-llm-text
+#   systemctl --user restart local-llm-text
+#   systemctl --user stop    local-llm-text
+#   journalctl --user -u local-llm-text -f      # live logs
+
+[Unit]
+Description=Local LLM Chat — text server (llama.cpp)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/local-llm-chat
+Environment=HF_HOME=%h/local-llm-chat/models/.hf-cache
+ExecStart=%h/local-llm-chat/third_party/llama.cpp/build/bin/llama-server \
+    -m %h/local-llm-chat/models/mistral-7b-q4/mistral-7b-instruct-v0.2.Q4_K_M.gguf \
+    -c 4096 --host 0.0.0.0 --port 8080
+Restart=on-failure
+RestartSec=5
+# Hardening (relax if the model path lives outside HOME)
+NoNewPrivileges=true
+ProtectSystem=full
+
+[Install]
+WantedBy=default.target

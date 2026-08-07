@@ -1,0 +1,45 @@
+# Core installer + detection (always needed)
+psutil>=5.9
+py-cpuinfo>=9.0
+huggingface_hub>=0.25
+requests>=2.31
+rich>=13.7
+typer>=0.12          # optional nicer CLI; main.py also works on argparse alone
+
+# GPU detection (NVIDIA)
+nvidia-ml-py3>=7.352 ; platform_system == "Linux"
+pynvml>=11.5         ; platform_system == "Linux"
+
+# Optional TUI
+textual>=0.80
+
+# Web UI + chat app (status panel, chat interface with streaming + history)
+fastapi>=0.115
+uvicorn[standard]>=0.32
+python-multipart>=0.0.9    # file uploads (attach files to analyse in chat)
+# Optional richer file analysis (chat attachments): PDF and Word text extraction
+pypdf>=5.0                 # .pdf
+# python-docx>=1.1         # .docx
+# `requests` (above) powers the OpenAI-compatible chat proxy; chat history uses
+# the stdlib sqlite3 (no dependency).
+# Optional: embedded GGUF chat with no separate server running (heavier; builds
+# a native lib — with Metal/CUDA when your toolchain supports it):
+# llama-cpp-python>=0.3
+
+# --- Inference/quantization extras (install per chosen backend; heavy) -------
+# Uncomment the block matching your hardware & task.
+#
+# Text (GPU, transformers/quantized):
+# torch>=2.4            # match CUDA build: --index-url https://download.pytorch.org/whl/cu124
+# transformers>=4.46
+# accelerate>=1.1
+# auto-gptq>=0.7        # 4-bit GPTQ quantization (CUDA)
+# bitsandbytes>=0.44    # 4-bit nf4 runtime (CUDA)
+# optimum>=1.23
+# vllm>=0.6             # high-throughput GPU serving
+#
+# Image / video (diffusers):
+# diffusers>=0.31
+# safetensors>=0.4
+# imageio[ffmpeg]>=2.35
+# pillow>=10.4

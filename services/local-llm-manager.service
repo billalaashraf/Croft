@@ -1,0 +1,21 @@
+# local-llm-manager.service — systemd unit for the FastAPI status/control panel.
+#
+#   cp services/local-llm-manager.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now local-llm-manager
+#   # panel: http://localhost:8090
+
+[Unit]
+Description=Local LLM Chat — manager web UI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/local-llm-chat
+Environment=LLM_MODELS_DIR=%h/local-llm-chat/models
+ExecStart=%h/local-llm-chat/.venv/bin/uvicorn webui.app:app --host 0.0.0.0 --port 8090
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

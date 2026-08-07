@@ -1,0 +1,30 @@
+# Dockerfile.sd — Stable Diffusion (diffusers) image + optional SVD video.
+#
+# A lean CUDA image with diffusers/transformers for SD 1.5 / SDXL / ControlNet
+# and a small FastAPI wrapper. For the full AUTOMATIC1111 GUI, prefer the
+# prebuilt `sd-webui` service in docker-compose.yml instead.
+#
+#   docker build -f docker/Dockerfile.sd -t local-llm/sd:diffusers .
+#   docker run --gpus all -p 7862:7862 -v $PWD/models:/models local-llm/sd:diffusers
+
+FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HOME=/models/.hf-cache
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-pip git ffmpeg && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN pip3 install --upgrade pip && pip3 install \
+        "torch==2.4.1" --index-url https://download.pytorch.org/whl/cu124 && \
+    pip3 install \
+        "diffusers==0.31.0" "transformers==4.46.0" "accelerate==1.1.0" \
+        "safetensors" "fastapi" "uvicorn[standard]" "pillow" "imageio[ffmpeg]"
+
+WORKDIR /app
+COPY webui/sd_server.py /app/sd_server.py
+
+EXPOSE 7862
+CMD ["uvicorn", "sd_server:app", "--host", "0.0.0.0", "--port", "7862"]
