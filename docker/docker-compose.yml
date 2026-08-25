@@ -13,6 +13,17 @@
 # Start everything:      docker compose up -d
 # Start one service:     docker compose up -d text-tgi
 # Models live in the shared ./models volume (host-mounted, survives restarts).
+#
+# Every published port is bound to 127.0.0.1 on purpose. Docker's port
+# publishing writes its own iptables rules, so a bare "8090:8090" is reachable
+# from the whole network *and* bypasses a host firewall — surprising enough
+# that it has to be spelled out. Change a binding only when you mean to expose
+# that service, and read docs/SECURITY.md before you do.
+#
+# The manager panel does NOT get the Docker socket by default. Mounting it
+# grants root-equivalent control of the host to anything that can talk to the
+# panel; if you want the compose status readout badly enough, opt in with the
+# separate `manager-privileged` profile below.
 
 x-gpu: &gpu
   deploy:
@@ -37,7 +48,7 @@ services:
     volumes:
       - ../models:/data
     ports:
-      - "8081:80"
+      - "127.0.0.1:8081:80"
     shm_size: "1g"
     restart: unless-stopped
     profiles: ["text", "gpu"]
@@ -51,7 +62,7 @@ services:
     volumes:
       - ../models:/models
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     restart: unless-stopped
     profiles: ["text", "cpu"]
 
@@ -64,8 +75,8 @@ services:
     volumes:
       - ../models:/app/models
     ports:
-      - "7860:7860"   # UI
-      - "5000:5000"   # OpenAI-compatible API
+      - "127.0.0.1:7860:7860"   # UI
+      - "127.0.0.1:5000:5000"   # OpenAI-compatible API
     restart: unless-stopped
     profiles: ["text-gui", "gpu"]
 
@@ -73,30 +84,64 @@ services:
   sd-webui:
     image: universonic/stable-diffusion-webui:latest
     <<: *gpu
+    # No --enable-insecure-extension-access: it lets anything that can reach
+    # this port install and run arbitrary extension code inside the container.
     environment:
-      - CLI_ARGS=--listen --api --xformers --enable-insecure-extension-access
+      - CLI_ARGS=--listen --api --xformers
     volumes:
       - ../models/stable-diffusion:/app/stable-diffusion-webui/models/Stable-diffusion
       - ../models/sd-outputs:/app/stable-diffusion-webui/outputs
     ports:
-      - "7861:7860"
+      - "127.0.0.1:7861:7860"
     restart: unless-stopped
     profiles: ["image", "gpu"]
 
   # --- Management / status panel ---
+  # No Docker socket here. Without it `docker_status()` reports "unavailable in
+  # this container" and everything else works; with it, the panel is a root
+  # shell on the host wearing a web UI. See manager-privileged below.
   manager:
     build:
       context: ..
       dockerfile: docker/Dockerfile.manager
     environment:
       - LLM_MODELS_DIR=/app/models
+      # Reached through the published loopback port, so the browser sends
+      # `Host: localhost:8090`, not the container's own address.
+      - LLM_WEBUI_HOST=127.0.0.1
+      # Persist the access token on the host so `docker compose down` does not
+      # invalidate every open tab. Read it with:
+      #   docker compose -f docker/docker-compose.yml logs manager | grep 'open:'
+      - LLM_WEBUI_TOKEN_FILE=/app/models/.webui_token
     volumes:
       - ../models:/app/models
-      - /var/run/docker.sock:/var/run/docker.sock   # read compose status
     ports:
-      - "8090:8090"
+      - "127.0.0.1:8090:8090"
     restart: unless-stopped
     profiles: ["manager"]
+
+  # --- Management panel WITH host Docker control (opt in deliberately) ---
+  # Same image, plus the socket. Anyone who reaches this panel can start a
+  # privileged container and own the host, so it is a separate profile and a
+  # separate service: you cannot switch it on by accident.
+  #   docker compose -f docker/docker-compose.yml --profile manager-privileged up -d
+  # Written out in full rather than via `extends`, so what this container gets
+  # is readable in one place instead of assembled from merge rules.
+  manager-privileged:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.manager
+    environment:
+      - LLM_MODELS_DIR=/app/models
+      - LLM_WEBUI_HOST=127.0.0.1
+      - LLM_WEBUI_TOKEN_FILE=/app/models/.webui_token
+    volumes:
+      - ../models:/app/models
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "127.0.0.1:8090:8090"
+    restart: unless-stopped
+    profiles: ["manager-privileged"]
 
 volumes:
   models:

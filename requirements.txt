@@ -1,30 +1,42 @@
-# Core installer + detection (always needed)
-psutil>=5.9
-py-cpuinfo>=9.0
-huggingface_hub>=0.25
-requests>=2.31
-rich>=13.7
-typer>=0.12          # optional nicer CLI; main.py also works on argparse alone
+# Upper bounds are on the packages whose APIs this code calls directly. They
+# are not superstition: `huggingface_hub` removed `resume_download` and
+# `local_dir_use_symlinks` in a minor release, and FastAPI's `on_event` is on
+# the same path. An unbounded `>=` means the next major release of any of these
+# breaks a fresh install with no code change on our side.
+#
+# For a byte-identical rebuild use requirements.lock (see the header there);
+# bootstrap_install.sh prefers it automatically when present.
 
-# GPU detection (NVIDIA)
-nvidia-ml-py3>=7.352 ; platform_system == "Linux"
-pynvml>=11.5         ; platform_system == "Linux"
+# Core installer + detection (always needed)
+psutil>=5.9,<8.0
+py-cpuinfo>=9.0,<10.0
+huggingface_hub>=0.25,<1.0
+requests>=2.31,<3.0
+rich>=13.7,<15.0
+typer>=0.12,<1.0        # optional nicer CLI; main.py also works on argparse alone
+
+# GPU detection (NVIDIA).
+# `nvidia-ml-py3` and `pynvml` both install a module called `pynvml`, from
+# different sources and with different APIs. Installing both means whichever
+# landed last wins, so GPU detection worked or didn't depending on pip's
+# resolution order. `pynvml` is the one NVIDIA maintains; keep only it.
+pynvml>=11.5,<13.0   ; platform_system == "Linux"
 
 # Optional TUI
-textual>=0.80
+textual>=0.80,<2.0
 
 # Web UI + chat app (status panel, chat interface with streaming + history)
-fastapi>=0.115
-uvicorn[standard]>=0.32
-python-multipart>=0.0.9    # file uploads (attach files to analyse in chat)
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.32,<1.0
+python-multipart>=0.0.9,<1.0    # file uploads (attach files to analyse in chat)
 # Optional richer file analysis (chat attachments): PDF and Word text extraction
-pypdf>=5.0                 # .pdf
-# python-docx>=1.1         # .docx
+pypdf>=5.0,<7.0                 # .pdf
+# python-docx>=1.1,<2.0         # .docx
 # `requests` (above) powers the OpenAI-compatible chat proxy; chat history uses
 # the stdlib sqlite3 (no dependency).
 # Optional: embedded GGUF chat with no separate server running (heavier; builds
 # a native lib — with Metal/CUDA when your toolchain supports it):
-# llama-cpp-python>=0.3
+# llama-cpp-python>=0.3,<1.0
 
 # --- Inference/quantization extras (install per chosen backend; heavy) -------
 # Uncomment the block matching your hardware & task.

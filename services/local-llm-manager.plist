@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  local-llm-manager.plist — launchd agent for the web app on macOS.
+
+  macOS has no systemd, so the .service files in this directory do nothing
+  here. This is the equivalent: a per-user LaunchAgent, which is the right
+  scope — it needs no root, and it stops when you log out.
+
+  Install (replace USERNAME, or run the sed line):
+    sed "s|/Users/USERNAME|$HOME|g" services/local-llm-manager.plist \
+      > ~/Library/LaunchAgents/com.local-llm.manager.plist
+    launchctl load ~/Library/LaunchAgents/com.local-llm.manager.plist
+
+  The access token is in the startup log; the URL that carries it is:
+    grep 'open:' ~/local-llm-chat/logs/manager.out.log | tail -1
+
+  Manage:
+    launchctl list | grep local-llm
+    launchctl unload ~/Library/LaunchAgents/com.local-llm.manager.plist
+
+  Note the bind address below is 127.0.0.1. This panel can start and stop
+  services; do not publish it to the network without reading docs/SECURITY.md.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.local-llm.manager</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/USERNAME/local-llm-chat/.venv/bin/uvicorn</string>
+    <string>webui.app:app</string>
+    <string>--host</string>
+    <string>127.0.0.1</string>
+    <string>--port</string>
+    <string>8090</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/USERNAME/local-llm-chat</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>LLM_MODELS_DIR</key>
+    <string>/Users/USERNAME/local-llm-chat/models</string>
+    <key>HF_HOME</key>
+    <string>/Users/USERNAME/local-llm-chat/models/.hf-cache</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <!-- Restart on a crash, but not on a clean stop — otherwise `launchctl
+         stop` fights the agent and it comes straight back. -->
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/Users/USERNAME/local-llm-chat/logs/manager.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/USERNAME/local-llm-chat/logs/manager.err.log</string>
+</dict>
+</plist>

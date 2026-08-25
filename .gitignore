@@ -69,6 +69,8 @@ htmlcov/
 !.env.example
 *.pem
 *.key
+# Web UI access token (webui/auth.py). Mode 0600; regenerated if deleted.
+.webui_token
 
 # ---------------------------------------------------------------------------
 # OS and editor

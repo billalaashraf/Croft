@@ -8,7 +8,7 @@
 :root{
   --bg:#f6f3ec; --surface:#fffdf8; --surface-2:#efeadf; --ink:#211d16;
   --muted:#6c6454; --border:rgba(33,29,22,.10); --border-strong:rgba(33,29,22,.16);
-  --accent:#9a5a22; --accent-soft:rgba(154,90,34,.10); --accent-ink:#fff;
+  --accent:#9a5a22; --accent-hover:#844c1c; --accent-soft:rgba(154,90,34,.10); --accent-ink:#fff;
   --user-bg:#ece6d8; --danger:#a23b2c;
   --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
   --sans:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
@@ -17,7 +17,7 @@
   :root{
     --bg:#161309; --surface:#1e1a12; --surface-2:#262016; --ink:#ece6da;
     --muted:#9c9280; --border:rgba(236,230,218,.10); --border-strong:rgba(236,230,218,.18);
-    --accent:#d98a4a; --accent-soft:rgba(217,138,74,.14); --accent-ink:#1a140c;
+    --accent:#d98a4a; --accent-hover:#e69b60; --accent-soft:rgba(217,138,74,.14); --accent-ink:#1a140c;
     --user-bg:#2a2318; --danger:#e08b6f;
   }
 }
@@ -196,7 +196,9 @@ select.pick:focus{outline:none;border-color:var(--accent)}
 .actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
 .btn{padding:8px 16px;border-radius:9px;font-size:13px;border:1px solid var(--border-strong)}
 .btn:hover{background:var(--surface-2)}
+.btn{transition:background .15s,border-color .15s}
 .btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.btn.primary:hover{background:var(--accent-hover);border-color:var(--accent-hover)}
 /* ---------- Attachments ---------- */
 .attachrow{max-width:760px;margin:0 auto 8px;display:flex;flex-wrap:wrap;gap:8px}
 .attachrow:empty{display:none}
@@ -220,9 +222,55 @@ select.pick:focus{outline:none;border-color:var(--accent)}
 .msg .att:hover{border-color:var(--accent)}
 .msg .att svg{width:13px;height:13px;color:var(--muted);flex:0 0 auto}
 @media (max-width:720px){.app{grid-template-columns:1fr}.side{display:none}}
+
+/* ---------- Access lock ---------- */
+/* overflow-y:auto, not hidden: on a short window the panel must scroll rather
+   than have the input or the error line cropped by the viewport edge. */
+.lock{position:fixed;inset:0;z-index:40;background:var(--bg);padding:28px;
+  display:none;align-items:center;justify-content:center;overflow-y:auto}
+.lock.open{display:flex}
+.lockbox{width:100%;max-width:436px}
+.lockbox .mark{width:26px;height:26px;display:block;margin-bottom:20px}
+.lockbox h1{margin:0 0 9px;font-size:19px;font-weight:600;letter-spacing:-.01em}
+.lockbox p{margin:0 0 9px;color:var(--muted);font-size:13.5px}
+.lockbox code{font-family:var(--mono);font-size:12.5px;color:var(--ink);
+  background:var(--surface-2);border-radius:5px;padding:1px 5px}
+.lockrow{display:flex;gap:9px;margin-top:22px}
+.lockrow input{flex:1;min-width:0;background:var(--surface);color:var(--ink);
+  border:1px solid var(--border-strong);border-radius:9px;padding:10px 12px;
+  font-family:var(--mono);font-size:13px;transition:border-color .15s}
+.lockrow input:focus{outline:none;border-color:var(--accent)}
+.lockrow .btn{flex:0 0 auto}
+/* Reserved so the panel never jumps when a message appears. */
+.lockerr{margin-top:12px;min-height:1.3em;font-family:var(--mono);font-size:12.5px;color:var(--danger)}
 </style>
 </head>
 <body>
+<!-- Shown only when this browser holds no accepted token; see webui/auth.py. -->
+<div class="lock" id="lock">
+  <div class="lockbox">
+    <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="2.5" y="4.5" width="19" height="13" rx="3.2" stroke="var(--accent)" stroke-width="1.7"/>
+      <path d="M7.5 21l2.6-3.5M16.5 21l-2.6-3.5" stroke="var(--accent)" stroke-width="1.7" stroke-linecap="round"/>
+      <circle cx="8.5" cy="11" r="1.15" fill="var(--accent)"/>
+      <circle cx="15.5" cy="11" r="1.15" fill="var(--accent)"/>
+    </svg>
+    <h1>This studio is locked to your account</h1>
+    <p>Everything on this machine can reach localhost, so the app asks for a key
+       that only your user account can read.</p>
+    <!-- Inline code is kept away from sentence-ending punctuation: the padding
+         on <code> renders as a stray gap before a full stop or a comma. -->
+    <p>Open the link the app printed at startup, or paste the contents of
+       <code id="lockPath">.webui_token</code> into the box below.</p>
+    <div class="lockrow">
+      <input id="lockInput" type="password" autocomplete="off" spellcheck="false"
+             placeholder="access token" aria-label="Access token">
+      <button class="btn primary" id="lockGo">Unlock</button>
+    </div>
+    <div class="lockerr" id="lockErr" role="status"></div>
+  </div>
+</div>
+
 <div class="app">
   <!-- Sidebar -->
   <aside class="side">
@@ -368,6 +416,77 @@ select.pick:focus{outline:none;border-color:var(--accent)}
 
 <script>
 const $ = s => document.querySelector(s);
+
+/* ---------- Local access token --------------------------------------------
+   This app is loopback-only by default, but loopback is not a permission
+   boundary: another account on this machine, or a web page doing DNS
+   rebinding, can reach it too. So every /api call carries a token that only
+   someone able to read .webui_token (mode 0600) has.
+
+   It arrives in the URL fragment — fragments are never sent to a server, so
+   the secret stays on this machine — and we strip it from the address bar
+   straight away. The cookie exists for plain <img src> links, which cannot
+   carry a header; the server accepts a cookie for reads only, never for a
+   request that changes anything. ------------------------------------------ */
+let TOKEN = '';
+function rememberToken(t){
+  TOKEN = t;
+  try{ sessionStorage.setItem('llm_token', t); }catch(e){}
+  document.cookie = 'llm_token=' + encodeURIComponent(t) + '; Path=/; SameSite=Strict';
+}
+(function readToken(){
+  const m = location.hash.match(/[#&]t=([^&]+)/);
+  if(m){
+    rememberToken(decodeURIComponent(m[1]));
+    history.replaceState(null, '', location.pathname + location.search);
+    return;
+  }
+  try{ TOKEN = sessionStorage.getItem('llm_token') || ''; }catch(e){}
+  if(!TOKEN){
+    const c = document.cookie.match(/(?:^|;\s*)llm_token=([^;]*)/);
+    if(c) TOKEN = decodeURIComponent(c[1]);
+  }
+})();
+
+/* Wrap fetch once instead of touching eleven call sites — and so any call
+   added later is covered by default rather than by remembering to. */
+const _fetch = window.fetch.bind(window);
+window.fetch = function(u, o){
+  const url = (typeof u === 'string') ? u : (u && u.url) || '';
+  if(url.indexOf('/api/') === 0){
+    o = Object.assign({}, o || {});
+    const h = new Headers(o.headers || {});
+    if(TOKEN) h.set('X-LLM-Token', TOKEN);
+    o.headers = h;
+    o.credentials = 'same-origin';
+  }
+  return _fetch(u, o).then(r => { if(r.status === 401) showLock(true); return r; });
+};
+
+function showLock(rejected){
+  const el = document.getElementById('lock');
+  if(!el) return;
+  el.classList.add('open');
+  if(rejected) document.getElementById('lockErr').textContent = 'That token was not accepted.';
+  const box = document.getElementById('lockInput');
+  if(box && document.activeElement !== box) box.focus();
+}
+
+async function unlock(){
+  const err = document.getElementById('lockErr');
+  const value = (document.getElementById('lockInput').value || '').trim();
+  if(!value){ err.textContent = 'Paste the token first.'; return; }
+  err.textContent = '';
+  let r;
+  // Raw fetch: a rejection here is expected, and should not re-trigger the
+  // wrapper's 401 handler on the panel that is already open.
+  try{ r = await _fetch('/api/models', {headers:{'X-LLM-Token': value}}); }
+  catch(e){ err.textContent = 'Could not reach the app.'; return; }
+  if(!r.ok){ err.textContent = 'That token was not accepted.'; return; }
+  rememberToken(value);
+  location.reload();
+}
+
 const api = (u,o) => fetch(u,o).then(r=>r.json());
 const esc = s => (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
@@ -843,7 +962,12 @@ $('#vidPrompt').addEventListener('input',sizeVid);
 $('#vidPrompt').addEventListener('keydown',e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); generateVideo(); }});
 $('#vidImgBtn').onclick=()=>$('#vidImgInput').click();
 $('#vidImgInput').addEventListener('change',e=>{ if(e.target.files[0]) addVidSource(e.target.files[0]); e.target.value=''; });
-boot();
+$('#lockGo').onclick=unlock;
+$('#lockInput').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); unlock(); }});
+
+// Without a token every request would 401 in a loop, so ask for it up front
+// rather than letting the app boot into a wall of failures.
+if(TOKEN) boot(); else showLock(false);
 </script>
 </body>
 </html>

@@ -140,8 +140,14 @@ downloads/changes) and `--yes` (assume-yes).
   the chat engine.
 - **Linux + NVIDIA**: install the CUDA driver, and the NVIDIA Container Toolkit if
   you use Docker — the bootstrap advises but never auto-installs these.
-- **Windows**: run everything inside **WSL2**; `bootstrap_install.ps1` bootstraps it.
-  Native-Windows CUDA for these stacks is not supported here.
+- **Windows**: "Windows support" here means **WSL2**, and only WSL2.
+  `bootstrap_install.ps1` checks that WSL is installed and that your default
+  distro is version 2 (offering to install or convert), then hands off to
+  `bootstrap_install.sh` inside it and smoke-tests the result. Native Windows
+  is out of scope because the inference stacks this installs — vLLM, TGI, and
+  the CUDA/Metal builds of llama.cpp — have no native-Windows support; CUDA
+  reaches WSL through the host NVIDIA driver. Windows forwards `localhost` into
+  WSL2, so the printed URL opens in a Windows browser unchanged.
 - **CPU-only**: fully supported — pick a small quantised GGUF (e.g. a 3B) for
   usable speed.
 
@@ -194,11 +200,23 @@ and prints a browser URL (default **http://127.0.0.1:8090**):
 
 | Variable | Default | Effect |
 |----------|---------|--------|
-| `LLM_WEBUI_HOST` | `127.0.0.1` | bind address — set `0.0.0.0` to reach it from other machines |
+| `LLM_WEBUI_HOST` | `127.0.0.1` | bind address. Setting `0.0.0.0` publishes the app to every network this machine is on — do that only with `LLM_WEBUI_TOKEN` set to a value you chose and `LLM_WEBUI_ALLOWED_HOSTS` naming the hostname you will use. Read [docs/SECURITY.md](docs/SECURITY.md) first |
 | `LLM_WEBUI_PORT` | `8090` | port |
+| `LLM_WEBUI_TOKEN` | generated | access token for `/api/*`. Generated once into `.webui_token` (mode 0600) when unset |
+| `LLM_WEBUI_ALLOWED_HOSTS` | unset | extra comma-separated hostnames the `Host` allow-list will accept |
 | `LLM_NO_WEBUI` | unset | set to `1` to skip launching it |
 
-It binds to localhost by default because the panel can start/stop services.
+**The URL carries an access token.** The bootstrap prints
+`http://127.0.0.1:8090/#t=<token>` — open that link rather than the bare
+address. The token sits in the fragment, which browsers never send to a server,
+so it reaches the page and goes no further. Lost it? It is in `.webui_token`,
+and the app also logs the link on startup; paste it into the unlock box.
+
+Loopback is not on its own a permission boundary — any process on the machine
+can reach it, and a web page can get there by DNS rebinding — so the app also
+checks the `Host` header and requires that token on every `/api` call. Details
+and the full threat model: [docs/SECURITY.md](docs/SECURITY.md).
+
 Native mode logs to `webui.log` and writes a PID to `.webui.pid` (stop it with
 `kill $(cat .webui.pid)`); docker mode runs the `manager` compose service (stop
 it with `docker compose -f docker/docker-compose.yml stop manager`).
@@ -421,6 +439,10 @@ single-file downloads. The new id is immediately usable:
   size, and framework. Numbers are deliberately conservative (1.5× overhead).
 - **Windows**: GPU inference is via WSL2 only (native Windows CUDA for these
   stacks is unsupported here).
+- **Local, not trusted**: binding to loopback is not a permission boundary, so
+  the app requires an access token and validates the `Host` header. It is
+  single-user by design — one token is one level of access, all of it. See
+  [docs/SECURITY.md](docs/SECURITY.md).
 
 ## Uninstall
 
@@ -438,7 +460,12 @@ pip install pytest
 pytest -q
 ```
 
-See `SECURITY.md`-style checklist inside this README's companion section and
-`docs/COMPATIBILITY.md`. Licensing: you are responsible for accepting each
-model's license before download; the installer enforces an explicit acceptance
-step for `gated` models.
+CI runs the same suite plus `shellcheck` on Ubuntu and macOS — see
+`.github/workflows/ci.yml`.
+
+See [docs/SECURITY.md](docs/SECURITY.md) for the threat model (what the app
+defends against, what it explicitly does not, and what changes if you bind it
+to anything other than loopback) and [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
+for hardware notes. Licensing: you are responsible for accepting each model's
+license before download; the installer enforces an explicit acceptance step for
+`gated` models.

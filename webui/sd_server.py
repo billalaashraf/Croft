@@ -36,7 +36,7 @@ except Exception as exc:  # pragma: no cover
 # Importing inference here is not an oversight: it registers the chat owner
 # with gpumem, so a job in this process can evict the model sitting in Ollama.
 # Without it the worker would only know how to free its own two pipelines.
-from webui import gpumem, imagegen, inference, videogen  # noqa: F401
+from webui import files, gpumem, imagegen, inference, videogen  # noqa: F401
 
 app = FastAPI(title="Local diffusion worker")
 
@@ -96,6 +96,14 @@ def generate_image(job: ImageJob) -> JSONResponse:
 
 @app.post("/generate/video")
 def generate_video(job: VideoJob) -> JSONResponse:
+    # `source_image` is the one field here that is a filesystem path rather
+    # than a number or a prompt. The app already checks it, but this worker
+    # listens on its own port and will take the job from anything that can
+    # reach it, so it checks for itself rather than trusting its caller.
+    if job.source_image and not files.is_within_uploads(job.source_image):
+        return JSONResponse(
+            {"error": "source_image must be a file under the uploads directory"},
+            status_code=400)
     with _JOB:
         try:
             return JSONResponse(videogen._generate_local(

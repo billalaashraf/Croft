@@ -43,7 +43,64 @@ fi
 log()  { printf '\033[1;34m[bootstrap]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*" >&2; }
 err()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; }
-run()  { if [ "$DRY_RUN" -eq 1 ]; then echo "[dry-run] $*"; else eval "$@"; fi; }
+
+# Render an argv for display, quoted so it can be pasted back verbatim.
+_quoted() {
+  local out="" a
+  for a in "$@"; do out="$out $(printf '%q' "$a")"; done
+  printf '%s' "${out# }"
+}
+
+# run <program> [args...]
+#
+# Executes directly — there is no `eval`, and no shell re-parses the arguments.
+# That matters because several call sites pass values from the environment
+# ($LLM_PKG_URL, $LLM_REPO_URL, $USER, an install path with a space in it), and
+# under `eval` any of those could close a quote and run a second command.
+run() {
+  if [ "$DRY_RUN" -eq 1 ]; then printf '[dry-run] %s\n' "$(_quoted "$@")"; return 0; fi
+  "$@"
+}
+
+# run_sh <literal-script> [args...]
+#
+# For the handful of prerequisite steps that genuinely need shell plumbing (a
+# pipe into `gpg`, a `tee` into a root-owned file). The script must be a
+# LITERAL with no interpolation: anything variable is passed as a positional
+# argument and referenced as "$1" inside, so it stays data.
+run_sh() {
+  local script="$1"; shift
+  if [ "$DRY_RUN" -eq 1 ]; then
+    if [ "$#" -gt 0 ]; then
+      printf '[dry-run] bash -c %s -- %s\n' "$(_quoted "$script")" "$(_quoted "$@")"
+    else
+      printf '[dry-run] bash -c %s\n' "$(_quoted "$script")"
+    fi
+    return 0
+  fi
+  bash -c "$script" bootstrap "$@"
+}
+
+# Portable SHA256 verification. macOS ships `shasum`, not `sha256sum`, so the
+# GNU-only form silently made the tarball path fail on every Mac.
+#   sha256_check <expected-hex> <file>
+sha256_check() {
+  local expected="$1" file="$2" actual=""
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "$file" | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    actual="$(shasum -a 256 "$file" | awk '{print $1}')"
+  elif command -v openssl >/dev/null 2>&1; then
+    actual="$(openssl dgst -sha256 "$file" | awk '{print $NF}')"
+  else
+    err "No SHA256 tool found (need sha256sum, shasum or openssl)."
+    return 2
+  fi
+  # Compare case-insensitively; the tools agree on lowercase but a hash pasted
+  # from a release page often is not.
+  [ "$(printf '%s' "$actual" | tr 'A-F' 'a-f')" \
+    = "$(printf '%s' "$expected" | tr 'A-F' 'a-f')" ]
+}
 
 confirm() {
   [ "$ASSUME_YES" -eq 1 ] && return 0
@@ -68,6 +125,13 @@ done
 VENV_DIR="$INSTALL_DIR/.venv"
 VENV_PY="$VENV_DIR/bin/python"
 
+# Always reach pip through the interpreter, never through .venv/bin/pip. Console
+# scripts in a venv carry an absolute shebang naming the venv that created them,
+# so renaming or copying the project directory leaves bin/pip pointing at a path
+# that no longer exists and every call dies with "bad interpreter". The
+# bin/python symlink points at the real base interpreter, so -m pip survives it.
+venv_pip() { "$VENV_PY" -m pip "$@"; }
+
 # Where models + the installer's state file live, mirroring the Python side
 # (installer/main.py: LLM_MODELS_DIR, default "models"). Absolute paths are used
 # as-is; relative ones are under INSTALL_DIR (the installer's working dir).
@@ -81,10 +145,15 @@ SESSION_FILE="$INSTALL_DIR/.bootstrap_session"   # our picker/progress journal
 # ---- OS / arch detection ----------------------------------------------------
 OS="$(uname -s)"; ARCH="$(uname -m)"
 case "$OS" in
-  Linux)  PLATFORM="linux" ;;
+  # WSL reports `uname -s` as Linux, so it can only be told apart *after* the
+  # Linux match — testing for it in a fallback branch (as this once did) means
+  # the branch is unreachable and WSL is never detected.
+  Linux)
+    if grep -qiE "microsoft|wsl" /proc/version 2>/dev/null; then PLATFORM="wsl"
+    else PLATFORM="linux"; fi ;;
   Darwin) PLATFORM="macos" ;;
-  *) if grep -qiE "microsoft|wsl" /proc/version 2>/dev/null; then PLATFORM="wsl";
-     else err "Unsupported OS: $OS (use WSL2 on Windows)"; exit 1; fi ;;
+  *) err "Unsupported OS: $OS (Windows is supported through WSL2 — run bootstrap_install.ps1)"
+     exit 1 ;;
 esac
 log "Detected platform: $PLATFORM ($ARCH)"
 
@@ -116,9 +185,27 @@ ensure_python() {
   if ! need_cmd python3; then
     warn "python3 not found."
     case "$PLATFORM" in
-      linux|wsl) confirm "Install python3 + venv via apt?" &&
-        run "sudo apt-get update && sudo apt-get install -y python3 python3-venv python3-pip" ;;
-      macos) confirm "Install python via Homebrew?" && run "brew install python" ;;
+      linux|wsl)
+        if ! need_cmd apt-get; then
+          err "python3 is required and apt-get is not available on this system."
+          err "Install Python 3.10+ with your distribution's package manager, then re-run."
+          exit 1
+        fi
+        if confirm "Install python3 + venv via apt?"; then
+          run sudo apt-get update
+          run sudo apt-get install -y python3 python3-venv python3-pip
+        fi ;;
+      macos)
+        # Never assume Homebrew exists. Offering `brew install` on a Mac
+        # without brew fails halfway through the prompt with a bare
+        # "command not found", which reads as a bug in this script.
+        if ! need_cmd brew; then
+          err "python3 is required and Homebrew is not installed."
+          err "Install Python from https://www.python.org/downloads/macos/"
+          err "  or install Homebrew first: https://brew.sh"
+          exit 1
+        fi
+        confirm "Install python via Homebrew?" && run brew install python ;;
     esac
   fi
   need_cmd python3 || { err "python3 is required."; exit 1; }
@@ -130,9 +217,17 @@ ensure_docker() {
     warn "Docker not found."
     case "$PLATFORM" in
       linux|wsl)
-        if confirm "Install Docker Engine via the official convenience script?"; then
-          run "curl -fsSL https://get.docker.com | sh"
-          run "sudo usermod -aG docker \"$USER\" || true"
+        # `curl | sh` hands the remote server your root shell and gives you no
+        # chance to look first. Same source, same TLS, but downloaded to a file
+        # you can read before it runs.
+        if confirm "Download Docker's official install script and run it (needs sudo)?"; then
+          run curl -fsSL --proto '=https' --tlsv1.2 -o /tmp/get-docker.sh https://get.docker.com
+          log "Saved to /tmp/get-docker.sh — inspect it if you like; it runs as root."
+          if [ "$ASSUME_YES" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
+            confirm "Run /tmp/get-docker.sh now?" || { err "Aborted."; exit 1; }
+          fi
+          run sudo sh /tmp/get-docker.sh
+          run sudo usermod -aG docker "$USER" || warn "Could not add $USER to the docker group."
           warn "Log out/in (or 'newgrp docker') for group changes to take effect."
         else
           err "Docker required for docker mode. Re-run with --mode native to skip."
@@ -149,12 +244,21 @@ ensure_docker() {
   if [ "$ACCEL" = "cuda" ] && [ "$PLATFORM" != "macos" ]; then
     if ! docker info 2>/dev/null | grep -qi nvidia; then
       warn "NVIDIA Container Toolkit not detected — GPUs won't be visible to containers."
-      if confirm "Install nvidia-container-toolkit via apt?"; then
-        run "distribution=\$(. /etc/os-release; echo \$ID\$VERSION_ID)"
-        run "curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg"
-        run "curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list"
-        run "sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit"
-        run "sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker"
+      if ! need_cmd apt-get; then
+        warn "apt-get not available — install nvidia-container-toolkit with your"
+        warn "package manager: https://docs.nvidia.com/datacenter/cloud-native/"
+      elif confirm "Install nvidia-container-toolkit via apt?"; then
+        # These two need a pipe (dearmor, tee into a root-owned path), so they
+        # go through run_sh with a literal script and no interpolation.
+        run_sh 'curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+                  | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg'
+        run_sh 'curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+                  | sed "s#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g" \
+                  | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list'
+        run sudo apt-get update
+        run sudo apt-get install -y nvidia-container-toolkit
+        run sudo nvidia-ctk runtime configure --runtime=docker
+        run sudo systemctl restart docker
       fi
     else
       log "NVIDIA Container Toolkit: present"
@@ -182,18 +286,18 @@ fetch_package() {
   mkdir -p "$INSTALL_DIR"
   if [ -n "$PKG_URL" ]; then
     log "Downloading installer package: $PKG_URL"
-    run "curl -fL --retry 5 -C - -o /tmp/local-llm.tar.gz \"$PKG_URL\""
+    run curl -fL --retry 5 -C - -o /tmp/local-llm.tar.gz "$PKG_URL"
     if [ -n "$PKG_SHA256" ] && [ "$DRY_RUN" -eq 0 ]; then
-      echo "$PKG_SHA256  /tmp/local-llm.tar.gz" | sha256sum -c - \
+      sha256_check "$PKG_SHA256" /tmp/local-llm.tar.gz \
         || { err "Checksum verification FAILED — aborting."; exit 1; }
       log "Checksum verified."
     else
       warn "No PKG_SHA256 provided — skipping integrity check (not recommended)."
     fi
-    run "tar -xzf /tmp/local-llm.tar.gz -C \"$INSTALL_DIR\" --strip-components=1"
+    run tar -xzf /tmp/local-llm.tar.gz -C "$INSTALL_DIR" --strip-components=1
   else
     log "No package URL set; cloning repo: $REPO_URL"
-    run "git clone --depth 1 \"$REPO_URL\" \"$INSTALL_DIR\""
+    run git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
   fi
 }
 fetch_package
@@ -205,14 +309,31 @@ fetch_package
 # the core requirements up front, then run the installer through that venv. This
 # also provides the uvicorn used to launch the web UI later.
 ensure_venv_deps() {
-  local pip="$VENV_DIR/bin/pip" req="$INSTALL_DIR/requirements.txt"
+  local req="$INSTALL_DIR/requirements.txt"
+
+  # Prefer the pinned set when it is there: it is the combination that was
+  # actually tested, so two machines installed a month apart get the same
+  # thing. LLM_NO_LOCK=1 opts back into resolving requirements.txt fresh.
+  if [ "${LLM_NO_LOCK:-0}" != "1" ] && [ -f "$INSTALL_DIR/requirements.lock" ]; then
+    req="$INSTALL_DIR/requirements.lock"
+    log "Using pinned dependencies from requirements.lock (LLM_NO_LOCK=1 to skip)."
+  fi
 
   if [ "$DRY_RUN" -eq 1 ]; then
     log "[dry-run] would set up venv + install dependencies:"
     echo "[dry-run] python3 -m venv \"$VENV_DIR\""
-    echo "[dry-run] \"$pip\" install --upgrade pip"
-    echo "[dry-run] \"$pip\" install -r \"$req\""
+    echo "[dry-run] \"$VENV_PY\" -m pip install --upgrade pip"
+    echo "[dry-run] \"$VENV_PY\" -m pip install -r \"$req\""
     return 0
+  fi
+
+  # An existing bin/python is not proof of a usable venv: one whose base
+  # interpreter was uninstalled, or that was copied off another machine, still
+  # has the symlink but cannot run. Prove it executes before trusting it, and
+  # rebuild from scratch if it does not.
+  if [ -x "$VENV_PY" ] && ! "$VENV_PY" -c "import sys" >/dev/null 2>&1; then
+    warn "The virtualenv at $VENV_DIR is broken (its base interpreter is gone) — rebuilding."
+    rm -rf "$VENV_DIR"
   fi
 
   if [ ! -x "$VENV_PY" ]; then
@@ -225,16 +346,28 @@ ensure_venv_deps() {
   fi
 
   log "Installing core dependencies (huggingface_hub, requests, rich, uvicorn ...)"
-  "$pip" install --upgrade pip >/dev/null 2>&1 || warn "pip self-upgrade skipped."
+  venv_pip install --upgrade pip >/dev/null 2>&1 || warn "pip self-upgrade skipped."
   if [ -f "$req" ]; then
-    if ! "$pip" install -r "$req"; then
-      err "Dependency install failed. The machine may be offline or pip is blocked."
-      err "Model download needs these packages — fix connectivity and re-run."
-      exit 1
+    if ! venv_pip install -r "$req"; then
+      # A lock resolved on another OS/Python can legitimately fail to install
+      # here (a wheel that does not exist for this platform). That is a reason
+      # to fall back, not to abandon the install.
+      if [ "$req" != "$INSTALL_DIR/requirements.txt" ] && [ -f "$INSTALL_DIR/requirements.txt" ]; then
+        warn "requirements.lock did not install on this platform — falling back to requirements.txt."
+        req="$INSTALL_DIR/requirements.txt"
+        venv_pip install -r "$req" || {
+          err "Dependency install failed. The machine may be offline or pip is blocked."
+          err "Model download needs these packages — fix connectivity and re-run."
+          exit 1; }
+      else
+        err "Dependency install failed. The machine may be offline or pip is blocked."
+        err "Model download needs these packages — fix connectivity and re-run."
+        exit 1
+      fi
     fi
   else
     warn "requirements.txt missing; installing the download-critical packages only."
-    "$pip" install "huggingface_hub>=0.25" "requests>=2.31" rich || {
+    venv_pip install "huggingface_hub>=0.25" "requests>=2.31" rich || {
       err "Failed to install huggingface_hub/requests — cannot download models."; exit 1; }
   fi
 
@@ -583,25 +716,30 @@ PY
   if [ "$ASSUME_YES" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
     read -r -p "Install them now? [Y/n]: " a || a="y"
     case "$a" in n|N|no|No)
-      log "Skipped. Install later:  $VENV_DIR/bin/pip install <engine>"; return 0 ;;
+      log "Skipped. Install later:  $VENV_PY -m pip install <engine>"; return 0 ;;
     esac
   fi
 
-  local pip="$VENV_DIR/bin/pip"
+  local pip="$VENV_PY -m pip"
   if [ "$want_llama" = "1" ]; then
     if [ "$DRY_RUN" -eq 1 ]; then echo "[dry-run] $pip install llama-cpp-python"
     else
       log "Building llama-cpp-python (this compiles, a few minutes) ..."
-      "$pip" install llama-cpp-python \
+      venv_pip install llama-cpp-python \
         && log "✓ chat engine ready." \
         || warn "llama-cpp-python failed — chat can still use an OpenAI endpoint (Settings)."
     fi
   fi
   if [ "$want_diff" = "1" ]; then
-    if [ "$DRY_RUN" -eq 1 ]; then echo "[dry-run] $pip install torch diffusers transformers accelerate safetensors pillow imageio imageio-ffmpeg"
+    if [ "$DRY_RUN" -eq 1 ]; then echo "[dry-run] $pip install torch diffusers 'transformers>=4.46,<5' accelerate safetensors pillow imageio imageio-ffmpeg"
     else
       log "Installing torch + diffusers (large download) ..."
-      "$pip" install torch diffusers transformers accelerate safetensors pillow imageio imageio-ffmpeg \
+      # transformers must stay on 4.x: 5.x requires huggingface_hub>=1.5, which
+      # collides with the deliberate <1.0 pin in requirements.txt (hub 1.x drops
+      # resume_download / local_dir_use_symlinks, which installer/downloader.py
+      # calls). Unpinned, pip installs transformers 5.x, downgrades the hub back
+      # to satisfy the lock, and leaves transformers unimportable.
+      venv_pip install torch diffusers "transformers>=4.46,<5" accelerate safetensors pillow imageio imageio-ffmpeg \
         && log "✓ image engine ready." \
         || warn "diffusers stack failed — image generation will be unavailable."
     fi
@@ -617,29 +755,52 @@ ensure_engines
 # services — set LLM_WEBUI_HOST=0.0.0.0 to reach it from other machines.
 WEBUI_HOST="${LLM_WEBUI_HOST:-127.0.0.1}"
 WEBUI_PORT="${LLM_WEBUI_PORT:-8090}"
-WEBUI_URL="http://${WEBUI_HOST}:${WEBUI_PORT}"
+# A wildcard bind is not an address you can open; show loopback instead.
+case "$WEBUI_HOST" in 0.0.0.0|::|"*") WEBUI_SHOWN="127.0.0.1" ;; *) WEBUI_SHOWN="$WEBUI_HOST" ;; esac
+WEBUI_URL="http://${WEBUI_SHOWN}:${WEBUI_PORT}"
 WEBUI_LOG="$INSTALL_DIR/webui.log"
 WEBUI_PID="$INSTALL_DIR/.webui.pid"
+WEBUI_TOKEN_FILE="${LLM_WEBUI_TOKEN_FILE:-$INSTALL_DIR/.webui_token}"
 
 webui_running() {
   [ -f "$WEBUI_PID" ] && kill -0 "$(cat "$WEBUI_PID" 2>/dev/null)" 2>/dev/null
 }
 
+# The app requires an access token on every /api call (see webui/auth.py), so
+# the useful URL is the one that carries it. The token sits in the fragment,
+# which browsers never send to a server — it reaches the page and stops there.
+webui_open_url() {
+  local token=""
+  if [ -n "${LLM_WEBUI_TOKEN:-}" ]; then
+    token="$LLM_WEBUI_TOKEN"
+  elif [ -r "$WEBUI_TOKEN_FILE" ]; then
+    token="$(tr -d ' \t\r\n' < "$WEBUI_TOKEN_FILE")"
+  fi
+  if [ -n "$token" ]; then printf '%s/#t=%s\n' "$WEBUI_URL" "$token"
+  else printf '%s\n' "$WEBUI_URL"; fi
+}
+
 start_webui_native() {
-  local uvicorn_bin
-  uvicorn_bin="$INSTALL_DIR/.venv/bin/uvicorn"
-  [ -x "$uvicorn_bin" ] || uvicorn_bin="$(command -v uvicorn 2>/dev/null || true)"
+  # Go through the venv's interpreter rather than its bin/uvicorn script: the
+  # script's shebang is an absolute path to the venv that created it, so it can
+  # be present and executable yet unusable after the project directory moves.
+  local uvicorn_cmd=()
+  if [ -x "$VENV_PY" ] && "$VENV_PY" -c "import uvicorn" >/dev/null 2>&1; then
+    uvicorn_cmd=("$VENV_PY" -m uvicorn)
+  elif command -v uvicorn >/dev/null 2>&1; then
+    uvicorn_cmd=("$(command -v uvicorn)")
+  fi
   if [ "$DRY_RUN" -eq 1 ]; then
-    echo "[dry-run] (cd \"$INSTALL_DIR\" && nohup ${uvicorn_bin:-uvicorn} webui.app:app --host $WEBUI_HOST --port $WEBUI_PORT >\"$WEBUI_LOG\" 2>&1 &)"
+    echo "[dry-run] (cd \"$INSTALL_DIR\" && nohup ${uvicorn_cmd[*]:-uvicorn} webui.app:app --host $WEBUI_HOST --port $WEBUI_PORT >\"$WEBUI_LOG\" 2>&1 &)"
     return 0
   fi
-  if [ -z "$uvicorn_bin" ]; then
+  if [ "${#uvicorn_cmd[@]}" -eq 0 ]; then
     warn "uvicorn not found — after 'pip install fastapi uvicorn' start it with:"
     warn "  (cd \"$INSTALL_DIR\" && uvicorn webui.app:app --host $WEBUI_HOST --port $WEBUI_PORT)"
     return 1
   fi
   # Detach with nohup so it survives this script; record the pid for stop/status.
-  ( cd "$INSTALL_DIR" && nohup "$uvicorn_bin" webui.app:app \
+  ( cd "$INSTALL_DIR" && nohup "${uvicorn_cmd[@]}" webui.app:app \
       --host "$WEBUI_HOST" --port "$WEBUI_PORT" >"$WEBUI_LOG" 2>&1 & echo $! >"$WEBUI_PID" )
 }
 
@@ -664,8 +825,9 @@ wait_for_webui() {
 
 open_browser() {
   [ "$ASSUME_YES" -eq 1 ] && return 0   # don't hijack a browser in unattended runs
-  if   command -v open     >/dev/null 2>&1; then (open     "$WEBUI_URL" >/dev/null 2>&1 &)
-  elif command -v xdg-open >/dev/null 2>&1; then (xdg-open "$WEBUI_URL" >/dev/null 2>&1 &)
+  local url; url="$(webui_open_url)"
+  if   command -v open     >/dev/null 2>&1; then (open     "$url" >/dev/null 2>&1 &)
+  elif command -v xdg-open >/dev/null 2>&1; then (xdg-open "$url" >/dev/null 2>&1 &)
   fi
 }
 
@@ -703,11 +865,13 @@ start_webui() {
 
   if wait_for_webui; then
     log "✓ Chat web app is running in the background. Open it in any browser:"
-    log "     $WEBUI_URL"
+    log "     $(webui_open_url)"
+    log "  That link carries this machine's access token. Keep it to yourself;"
+    log "  the token also lives in $WEBUI_TOKEN_FILE (readable only by you)."
     open_browser
   else
     warn "Web UI did not respond yet; it may still be starting. Logs: $WEBUI_LOG"
-    log  "Once up, open it at: $WEBUI_URL"
+    log  "Once up, open it at: $(webui_open_url)"
   fi
   if [ "$MODE" = "docker" ]; then
     log "  stop it with:  (cd \"$INSTALL_DIR\" && docker compose -f docker/docker-compose.yml stop manager)"

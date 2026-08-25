@@ -1,0 +1,70 @@
+# requirements.lock — a fully pinned, known-good dependency set.
+#
+# Generated with `pip freeze` from a clean virtualenv built from
+# requirements.txt, then verified to install and import. Use it when you want
+# the exact set that was tested rather than whatever the resolver picks today:
+#
+#     pip install -r requirements.lock
+#
+# bootstrap_install.sh prefers this file automatically when it is present.
+# Set LLM_NO_LOCK=1 to make it use requirements.txt instead (for example to
+# pick up a newer patch release).
+#
+# CAVEAT, and it is the reason this file is not simply "the" requirements:
+# `pip freeze` records one resolution on one platform and drops environment
+# markers. This set was resolved on macOS/arm64 with CPython 3.14, so the
+# Linux-only GPU package is re-added below WITH its marker — without that,
+# installing from this lock on Linux would silently lose GPU detection.
+# Regenerate after changing requirements.txt:
+#
+#     python3 -m venv /tmp/lockenv
+#     /tmp/lockenv/bin/pip install -r requirements.txt
+#     /tmp/lockenv/bin/pip freeze > requirements.lock   # then re-add this header
+#
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.14.2
+certifi==2026.7.22
+charset-normalizer==3.5.1
+click==8.4.2
+fastapi==0.141.1
+filelock==3.32.4
+fsspec==2026.7.0
+h11==0.16.0
+hf-xet==1.6.0
+httptools==0.8.0
+huggingface_hub==0.36.2
+idna==3.19
+linkify-it-py==2.1.1
+markdown-it-py==4.2.0
+mdit-py-plugins==0.6.1
+mdurl==0.1.2
+packaging==26.3
+platformdirs==4.11.4
+psutil==7.2.2
+py-cpuinfo==9.0.0
+pydantic==2.13.4
+pydantic_core==2.46.4
+Pygments==2.21.0
+pypdf==6.16.2
+python-dotenv==1.2.3
+python-multipart==0.0.32
+PyYAML==6.0.3
+requests==2.34.2
+rich==14.3.4
+shellingham==1.5.4
+starlette==1.6.0
+textual==1.0.0
+tqdm==4.70.0
+typer==0.27.1
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+uc-micro-py==2.0.0
+urllib3==2.7.0
+uvicorn==0.52.4
+uvloop==0.22.1
+watchfiles==1.2.0
+websockets==17.0.1
+
+# Linux-only, marker preserved by hand (see the caveat above).
+pynvml==12.0.0 ; platform_system == "Linux"

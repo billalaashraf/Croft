@@ -15,7 +15,8 @@
     "format": "string — gguf | gptq | safetensors | diffusers",
     "recommended_min_vram_GB": "number — minimum VRAM for comfortable use",
     "recommended_mode": "string — docker | native | cpu-only",
-    "integrity_sha256": "string|null — SHA256 of download_url file, or null for snapshot repos"
+    "integrity_sha256": "string|null — SHA256 of download_url file, or null for snapshot repos",
+    "hf_allow_patterns": "string[]|null — glob filter for snapshot downloads; null pulls the whole repo. GGUF repos hold every quantisation, so an unfiltered snapshot can be 10x the advertised size. Patterns are matched case-sensitively, hence both Q4_K_M and q4_k_m."
   },
   "models": [
     {
@@ -27,12 +28,20 @@
       "license": "Apache-2.0",
       "gated": false,
       "params": 7000000000,
-      "size_bytes": 4368439488,
-      "quantized_formats_available": ["int4", "int8"],
+      "size_bytes": 4368439584,
+      "quantized_formats_available": [
+        "int4",
+        "int8"
+      ],
       "format": "gguf",
       "recommended_min_vram_GB": 0,
       "recommended_mode": "cpu-only",
-      "integrity_sha256": "3e0039fd0273fcbe...REPLACE_WITH_PUBLISHED_SHA256"
+      "integrity_sha256": "3e0039fd0273fcbebb49228943b17831aadd55cbcbf56f0af00499be2040ccf9",
+      "hf_allow_patterns": [
+        "*Q4_K_M*.gguf",
+        "*q4_k_m*.gguf",
+        "*.json"
+      ]
     },
     {
       "id": "qwen2.5-7b-q4",
@@ -43,12 +52,21 @@
       "license": "Apache-2.0",
       "gated": false,
       "params": 7600000000,
-      "size_bytes": 4700000000,
-      "quantized_formats_available": ["int4", "int8", "fp16"],
+      "size_bytes": 4683073632,
+      "quantized_formats_available": [
+        "int4",
+        "int8",
+        "fp16"
+      ],
       "format": "gguf",
       "recommended_min_vram_GB": 6,
       "recommended_mode": "native",
-      "integrity_sha256": null
+      "integrity_sha256": null,
+      "hf_allow_patterns": [
+        "*Q4_K_M*.gguf",
+        "*q4_k_m*.gguf",
+        "*.json"
+      ]
     },
     {
       "id": "llama3.1-8b-fp16",
@@ -60,11 +78,14 @@
       "gated": true,
       "params": 8000000000,
       "size_bytes": 16060000000,
-      "quantized_formats_available": ["fp16"],
+      "quantized_formats_available": [
+        "fp16"
+      ],
       "format": "safetensors",
       "recommended_min_vram_GB": 20,
       "recommended_mode": "docker",
-      "integrity_sha256": null
+      "integrity_sha256": null,
+      "hf_allow_patterns": null
     },
     {
       "id": "mixtral-8x7b-gptq",
@@ -76,11 +97,14 @@
       "gated": false,
       "params": 46700000000,
       "size_bytes": 24000000000,
-      "quantized_formats_available": ["int4"],
+      "quantized_formats_available": [
+        "int4"
+      ],
       "format": "gptq",
       "recommended_min_vram_GB": 28,
       "recommended_mode": "docker",
-      "integrity_sha256": null
+      "integrity_sha256": null,
+      "hf_allow_patterns": null
     },
     {
       "id": "llama3.3-70b-q4",
@@ -91,12 +115,20 @@
       "license": "Llama-3.3-Community",
       "gated": true,
       "params": 70000000000,
-      "size_bytes": 42500000000,
-      "quantized_formats_available": ["int4", "int8"],
+      "size_bytes": 42520398816,
+      "quantized_formats_available": [
+        "int4",
+        "int8"
+      ],
       "format": "gguf",
       "recommended_min_vram_GB": 48,
       "recommended_mode": "docker",
-      "integrity_sha256": null
+      "integrity_sha256": null,
+      "hf_allow_patterns": [
+        "*Q4_K_M*.gguf",
+        "*q4_k_m*.gguf",
+        "*.json"
+      ]
     },
     {
       "id": "sd-1.5",
@@ -108,11 +140,14 @@
       "gated": false,
       "params": 980000000,
       "size_bytes": 4265000000,
-      "quantized_formats_available": ["fp16"],
+      "quantized_formats_available": [
+        "fp16"
+      ],
       "format": "diffusers",
       "recommended_min_vram_GB": 4,
       "recommended_mode": "native",
-      "integrity_sha256": null
+      "integrity_sha256": null,
+      "hf_allow_patterns": null
     },
     {
       "id": "sdxl-1.0",
@@ -124,11 +159,14 @@
       "gated": false,
       "params": 3500000000,
       "size_bytes": 13000000000,
-      "quantized_formats_available": ["fp16"],
+      "quantized_formats_available": [
+        "fp16"
+      ],
       "format": "diffusers",
       "recommended_min_vram_GB": 10,
       "recommended_mode": "native",
-      "integrity_sha256": null
+      "integrity_sha256": null,
+      "hf_allow_patterns": null
     },
     {
       "id": "controlnet-sdxl-canny",
@@ -140,11 +178,14 @@
       "gated": false,
       "params": 1300000000,
       "size_bytes": 5000000000,
-      "quantized_formats_available": ["fp16"],
+      "quantized_formats_available": [
+        "fp16"
+      ],
       "format": "diffusers",
       "recommended_min_vram_GB": 12,
       "recommended_mode": "native",
-      "integrity_sha256": null
+      "integrity_sha256": null,
+      "hf_allow_patterns": null
     },
     {
       "id": "svd-xt",
@@ -156,11 +197,14 @@
       "gated": true,
       "params": 1500000000,
       "size_bytes": 9500000000,
-      "quantized_formats_available": ["fp16"],
+      "quantized_formats_available": [
+        "fp16"
+      ],
       "format": "diffusers",
       "recommended_min_vram_GB": 16,
       "recommended_mode": "docker",
-      "integrity_sha256": null
+      "integrity_sha256": null,
+      "hf_allow_patterns": null
     },
     {
       "id": "animatediff-sd15",
@@ -172,11 +216,14 @@
       "gated": false,
       "params": 1400000000,
       "size_bytes": 3000000000,
-      "quantized_formats_available": ["fp16"],
+      "quantized_formats_available": [
+        "fp16"
+      ],
       "format": "diffusers",
       "recommended_min_vram_GB": 8,
       "recommended_mode": "native",
-      "integrity_sha256": null
+      "integrity_sha256": null,
+      "hf_allow_patterns": null
     }
   ]
 }

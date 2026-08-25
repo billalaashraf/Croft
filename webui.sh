@@ -25,7 +25,10 @@ cd "$SCRIPT_DIR"
 
 HOST="${LLM_WEBUI_HOST:-127.0.0.1}"
 PORT="${LLM_WEBUI_PORT:-8090}"
-URL="http://${HOST}:${PORT}"
+# A wildcard bind is not an address anyone can open; show loopback instead.
+case "$HOST" in 0.0.0.0|::|"*") SHOWN_HOST="127.0.0.1" ;; *) SHOWN_HOST="$HOST" ;; esac
+URL="http://${SHOWN_HOST}:${PORT}"
+TOKEN_FILE="${LLM_WEBUI_TOKEN_FILE:-$SCRIPT_DIR/.webui_token}"
 VENV_DIR="${LLM_VENV_DIR:-$SCRIPT_DIR/.venv}"
 PIDFILE="$SCRIPT_DIR/.webui.pid"
 LOGFILE="$SCRIPT_DIR/webui.log"
@@ -53,25 +56,43 @@ pid_on_port() {  # PID listening on $1, or empty
 
 port_pid() { pid_on_port "$PORT"; }
 
-resolve_uvicorn() {  # sets UVICORN; 0 if found, 1 if not
-  if [ -x "$VENV_DIR/bin/uvicorn" ]; then UVICORN="$VENV_DIR/bin/uvicorn"; return 0; fi
-  if command -v uvicorn >/dev/null 2>&1; then UVICORN="$(command -v uvicorn)"; return 0; fi
+# Sets UVICORN as a command array; 0 if found, 1 if not.
+#
+# The venv's Python is preferred over its bin/uvicorn script. A console script
+# hardcodes the absolute path of the venv that built it into its shebang, so a
+# renamed or copied project directory leaves bin/uvicorn present and executable
+# but dead ("bad interpreter"). Testing `import uvicorn` through the interpreter
+# checks the thing that actually has to work.
+resolve_uvicorn() {
+  if [ -x "$VENV_DIR/bin/python" ] && \
+     "$VENV_DIR/bin/python" -c "import uvicorn" >/dev/null 2>&1; then
+    UVICORN=("$VENV_DIR/bin/python" -m uvicorn); return 0
+  fi
+  if command -v uvicorn >/dev/null 2>&1; then UVICORN=("$(command -v uvicorn)"); return 0; fi
   return 1
 }
 
 ensure_uvicorn() {  # resolve, else create a venv and install requirements
   resolve_uvicorn && return 0
   warn "uvicorn not found."
+  # A bin/python that exists but cannot run means the base interpreter is gone;
+  # reusing it would fail every install below, so start over.
+  if [ -x "$VENV_DIR/bin/python" ] && \
+     ! "$VENV_DIR/bin/python" -c "import sys" >/dev/null 2>&1; then
+    warn "The virtualenv at $VENV_DIR is broken — rebuilding."
+    rm -rf "$VENV_DIR"
+  fi
   if [ ! -x "$VENV_DIR/bin/python" ]; then
     log "Creating virtualenv at $VENV_DIR ..."
     python3 -m venv "$VENV_DIR" || { err "could not create venv (need python3-venv)"; return 1; }
   fi
   log "Installing dependencies ..."
-  "$VENV_DIR/bin/pip" install -q --upgrade pip || true
+  local py="$VENV_DIR/bin/python"
+  "$py" -m pip install -q --upgrade pip || true
   if [ -f requirements.txt ]; then
-    "$VENV_DIR/bin/pip" install -q -r requirements.txt || { err "dependency install failed"; return 1; }
+    "$py" -m pip install -q -r requirements.txt || { err "dependency install failed"; return 1; }
   else
-    "$VENV_DIR/bin/pip" install -q fastapi "uvicorn[standard]" requests || { err "install failed"; return 1; }
+    "$py" -m pip install -q fastapi "uvicorn[standard]" requests || { err "install failed"; return 1; }
   fi
   resolve_uvicorn
 }
@@ -81,7 +102,25 @@ wait_up() {  # poll without sleep via curl retry; 0 when it answers
   curl -fsS --retry 30 --retry-connrefused --retry-delay 1 -o /dev/null "$URL" 2>/dev/null
 }
 
-is_chat_app() { curl -fsS "$URL/api/models" >/dev/null 2>&1; }
+# /api is token-gated (webui/auth.py), so a liveness probe has to present the
+# token — otherwise a perfectly healthy app reads as "not the chat app".
+read_token() {
+  if [ -n "${LLM_WEBUI_TOKEN:-}" ]; then printf '%s' "$LLM_WEBUI_TOKEN"
+  elif [ -r "$TOKEN_FILE" ]; then tr -d ' \t\r\n' < "$TOKEN_FILE"
+  else printf ''; fi
+}
+
+# The URL worth printing: the token rides in the fragment, which the browser
+# keeps to itself and never sends to the server.
+open_url() {
+  local t; t="$(read_token)"
+  if [ -n "$t" ]; then printf '%s/#t=%s' "$URL" "$t"; else printf '%s' "$URL"; fi
+}
+
+is_chat_app() {
+  local t; t="$(read_token)"
+  curl -fsS -H "X-LLM-Token: $t" "$URL/api/models" >/dev/null 2>&1
+}
 
 # ---- chat backend (ollama) -------------------------------------------------
 ensure_ollama() {
@@ -144,10 +183,11 @@ native_start() {
   ensure_ollama
   sd_start
   log "Starting chat web app on $URL ..."
-  nohup "$UVICORN" webui.app:app --host "$HOST" --port "$PORT" >"$LOGFILE" 2>&1 &
+  nohup "${UVICORN[@]}" webui.app:app --host "$HOST" --port "$PORT" >"$LOGFILE" 2>&1 &
   echo $! > "$PIDFILE"
   if wait_up; then
-    log "✓ Running at $URL  (pid $(cat "$PIDFILE"))"
+    log "✓ Running (pid $(cat "$PIDFILE")). Open:"
+    log "     $(open_url)"
     is_chat_app && log "  chat app is live." || warn "  responding, but /api/models missing — check $LOGFILE"
   else
     warn "Started but not responding yet; see $LOGFILE"; return 1
@@ -189,7 +229,7 @@ native_status() {
   [ -n "$other" ] && log "port $PORT listener: PID $other ($(ps -p "$other" -o comm= 2>/dev/null || echo '?'))"
   local code; code="$(curl -s -o /dev/null -w '%{http_code}' "$URL" 2>/dev/null || true)"; code="${code:-000}"
   log "HTTP $URL -> $code"
-  if is_chat_app; then log "serving: chat app (/api/models OK) → $URL"
+  if is_chat_app; then log "serving: chat app (/api/models OK) → $(open_url)"
   elif [ "$code" = "200" ]; then warn "serving: something else on $PORT (old panel?) — /api/models missing"
   else log "serving: nothing reachable"; fi
 }

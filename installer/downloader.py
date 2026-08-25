@@ -75,28 +75,58 @@ def http_download(url: str, dest: str, *,
 
     os.makedirs(os.path.dirname(os.path.abspath(dest)) or ".", exist_ok=True)
     part = dest + ".part"
-    headers: Dict[str, str] = {}
+    base_headers: Dict[str, str] = {}
     if token:
-        headers["Authorization"] = f"Bearer {token}"
+        base_headers["Authorization"] = f"Bearer {token}"
+
+    # An explicit flag rather than a while/else: the loop now has two ways out
+    # (success, and giving up without a final pointless sleep), and `else`
+    # cannot tell them apart. Without this a run that exhausted its retries
+    # fell through to the verification step and — with no expected hash to
+    # check — returned the path of a file that was never written.
+    completed = False
+    last_error: Optional[BaseException] = None
 
     attempt = 0
     while attempt < max_retries:
         attempt += 1
         resume_at = os.path.getsize(part) if os.path.exists(part) else 0
+        # Rebuilt every attempt. Carrying one dict across retries meant a
+        # `Range` header from an earlier attempt survived into a later one that
+        # had no partial file left to resume from, so the server returned bytes
+        # from the middle of the file and the download silently lost its head.
+        headers = dict(base_headers)
         if resume_at:
             headers["Range"] = f"bytes={resume_at}-"
         try:
             with requests.get(url, headers=headers, stream=True, timeout=60) as r:
-                if r.status_code == 416:  # range not satisfiable => already whole
-                    os.replace(part, dest)
-                    break
+                if r.status_code == 416:
+                    # Range not satisfiable: we already hold the whole file.
+                    # Only true if we actually asked for a range.
+                    if resume_at and os.path.exists(part):
+                        os.replace(part, dest)
+                        completed = True
+                        break
+                    raise RuntimeError(
+                        "server rejected the byte range but there is nothing "
+                        "to resume from")
                 r.raise_for_status()
-                total = None
-                if "Content-Length" in r.headers:
-                    total = int(r.headers["Content-Length"]) + resume_at
+                # A server may ignore Range and answer 200 with the whole file.
+                # Appending that to a partial would corrupt it, so start over.
                 mode = "ab" if resume_at and r.status_code == 206 else "wb"
                 if mode == "wb":
                     resume_at = 0
+                # Order matters: Content-Length is the length of *this*
+                # response, so the bytes already on disk are only part of the
+                # total when we are genuinely resuming. Computing this before
+                # the mode decision inflated the total on a 200 fallback and
+                # left the progress bar stuck short of 100%.
+                total = None
+                if "Content-Length" in r.headers:
+                    try:
+                        total = int(r.headers["Content-Length"]) + resume_at
+                    except ValueError:
+                        total = None
                 downloaded = resume_at
                 with open(part, mode) as fh:
                     for block in r.iter_content(_CHUNK):
@@ -107,15 +137,24 @@ def http_download(url: str, dest: str, *,
                         if progress:
                             progress(downloaded, total)
             os.replace(part, dest)
+            completed = True
             break
         except Exception as exc:  # network hiccup -> back off and resume
+            last_error = exc
+            have = os.path.getsize(part) if os.path.exists(part) else 0
+            if attempt >= max_retries:
+                sys.stderr.write(
+                    f"[downloader] attempt {attempt}/{max_retries} failed: {exc}\n")
+                break          # no point sleeping before giving up
             wait = min(2 ** attempt, 30)
             sys.stderr.write(
                 f"[downloader] attempt {attempt}/{max_retries} failed: {exc}; "
-                f"retrying in {wait}s (resuming from {os.path.getsize(part) if os.path.exists(part) else 0} bytes)\n")
+                f"retrying in {wait}s (resuming from {have} bytes)\n")
             time.sleep(wait)
-    else:
-        raise RuntimeError(f"Download failed after {max_retries} attempts: {url}")
+
+    if not completed:
+        raise RuntimeError(
+            f"Download failed after {max_retries} attempts: {url} ({last_error})")
 
     if not verify_sha256(dest, expected_sha256):
         # Leave the file for inspection but signal failure clearly.
@@ -149,16 +188,17 @@ def hf_download(repo_id: str, dest_dir: str, *,
             "huggingface_hub not installed. `pip install huggingface_hub` "
             f"or use http_download for direct mirrors. ({exc})")
     os.makedirs(dest_dir, exist_ok=True)
-    path = snapshot_download(
+    # No `resume_download=True` or `local_dir_use_symlinks=False` here. Both
+    # were deprecated and then removed: resuming is the default now, and a
+    # `local_dir` snapshot already writes real files rather than symlinks.
+    # Passing them warns on the versions this project pins and raises on 1.x.
+    return snapshot_download(
         repo_id=repo_id,
         revision=revision,
         local_dir=dest_dir,
         token=token,
         allow_patterns=allow_patterns,
-        resume_download=True,          # resumable
-        local_dir_use_symlinks=False,
     )
-    return path
 
 
 def cli_progress(downloaded: int, total: Optional[int]) -> None:

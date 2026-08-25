@@ -57,26 +57,43 @@ class ModelEntry:
     approx_disk_gb: float = 0.0
     recommended_mode: str = "native"   # "docker" | "native" | "cpu-only"
     notes: str = ""
+    # Direct single-file URL. When set, the download is fetched over plain HTTP
+    # with resume and verified against `integrity_sha256` — the only path that
+    # actually checks a hash we published rather than trusting the hub.
+    download_url: Optional[str] = None
+    integrity_sha256: Optional[str] = None
+    # Glob filter for snapshot downloads. A GGUF repo holds every quantisation,
+    # so pulling one unfiltered fetches many times the advertised size.
+    hf_allow_patterns: Optional[List[str]] = None
 
     def required_gb(self) -> float:
         mult = OVERHEAD_MULT
         return estimate_required_gb(self.params_billion, self.precision, mult)
 
 
+# GGUF repos publish every quantisation side by side, so a snapshot has to be
+# filtered down to the one we advertise. Matching is case-sensitive and the
+# repos disagree on case (`Q4_K_M` vs `q4_k_m`), hence both spellings.
+GGUF_Q4_PATTERNS = ["*Q4_K_M*.gguf", "*q4_k_m*.gguf", "*.json"]
+
 # Curated, permissive-first defaults. HF repo IDs are real, widely-used repos.
 DEFAULT_CATALOG: List[ModelEntry] = [
     # ---- TEXT (CPU-friendly GGUF quantized) ----
     ModelEntry("qwen2.5-3b-q4", "Qwen/Qwen2.5-3B-Instruct-GGUF", "text", 3.0,
                "int4", "gguf", "Apache-2.0", False, 2.1, "cpu-only",
-               "Great small CPU/edge model"),
+               "Great small CPU/edge model",
+               hf_allow_patterns=GGUF_Q4_PATTERNS),
     ModelEntry("llama3.2-3b-q4", "bartowski/Llama-3.2-3B-Instruct-GGUF", "text",
                3.2, "int4", "gguf", "Llama-3.2-Community", True, 2.2, "cpu-only",
-               "Gated: accept Meta license on HF first"),
+               "Gated: accept Meta license on HF first",
+               hf_allow_patterns=GGUF_Q4_PATTERNS),
     ModelEntry("mistral-7b-q4", "TheBloke/Mistral-7B-Instruct-v0.2-GGUF", "text",
                7.0, "int4", "gguf", "Apache-2.0", False, 4.1, "cpu-only",
-               "Strong 7B, runs on CPU or small GPU"),
+               "Strong 7B, runs on CPU or small GPU",
+               hf_allow_patterns=GGUF_Q4_PATTERNS),
     ModelEntry("qwen2.5-7b-q4", "Qwen/Qwen2.5-7B-Instruct-GGUF", "text", 7.6,
-               "int4", "gguf", "Apache-2.0", False, 4.7, "native"),
+               "int4", "gguf", "Apache-2.0", False, 4.7, "native",
+               hf_allow_patterns=GGUF_Q4_PATTERNS),
     # ---- TEXT (GPU GPTQ / fp16) ----
     ModelEntry("mistral-7b-gptq", "TheBloke/Mistral-7B-Instruct-v0.2-GPTQ",
                "text", 7.0, "int4", "gptq", "Apache-2.0", False, 4.2, "native",
@@ -91,7 +108,8 @@ DEFAULT_CATALOG: List[ModelEntry] = [
                32.0, "int4", "gptq", "Apache-2.0", False, 19.0, "docker"),
     ModelEntry("llama3.3-70b-q4", "bartowski/Llama-3.3-70B-Instruct-GGUF",
                "text", 70.0, "int4", "gguf", "Llama-3.3-Community", True, 40.0,
-               "docker", "Gated; multi-GPU or CPU offload recommended"),
+               "docker", "Gated; multi-GPU or CPU offload recommended",
+               hf_allow_patterns=GGUF_Q4_PATTERNS),
     # ---- IMAGE ----
     ModelEntry("sd-1.5", "runwayml/stable-diffusion-v1-5", "image", 0.98, "fp16",
                "diffusers", "CreativeML-OpenRAIL-M", False, 4.3, "native",
@@ -123,20 +141,30 @@ def load_manifest(path: str = "models_manifest.json") -> List[ModelEntry]:
             with open(path, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
             for e in data.get("models", []):
+                fmt = e.get("format", "safetensors")
+                patterns = e.get("hf_allow_patterns")
+                # A GGUF entry with no filter would snapshot every quant in the
+                # repo. Fall back to the standard Q4 filter rather than quietly
+                # downloading ten times what the entry advertises.
+                if patterns is None and fmt == "gguf":
+                    patterns = list(GGUF_Q4_PATTERNS)
                 catalog[e["id"]] = ModelEntry(
-                    id=e["id"], hf_repo=e.get("source_url", "").replace(
-                        "https://huggingface.co/", ""),
+                    id=e["id"], hf_repo=e.get("hf_repo") or e.get(
+                        "source_url", "").replace("https://huggingface.co/", ""),
                     kind=e.get("kind", "text"),
                     params_billion=float(e.get("params", 0)) / 1e9
                     if e.get("params", 0) > 1e6 else float(e.get("params", 0)),
                     precision=(e.get("quantized_formats_available") or ["fp16"])[0]
                     if isinstance(e.get("quantized_formats_available"), list) else "fp16",
-                    format=e.get("format", "safetensors"),
+                    format=fmt,
                     license=e.get("license", "unknown"),
                     gated=e.get("gated", False),
                     approx_disk_gb=float(e.get("size_bytes", 0)) / (1024 ** 3),
                     recommended_mode=e.get("recommended_mode", "native"),
                     notes=e.get("notes", ""),
+                    download_url=e.get("download_url"),
+                    integrity_sha256=e.get("integrity_sha256"),
+                    hf_allow_patterns=patterns,
                 )
         except Exception:
             pass  # malformed manifest -> silently fall back to defaults

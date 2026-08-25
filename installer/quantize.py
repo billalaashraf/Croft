@@ -74,6 +74,28 @@ def build_llamacpp(llamacpp_dir: str = "third_party/llama.cpp", *,
 # ---------------------------------------------------------------------------
 # AutoGPTQ — 4-bit GPTQ quantization
 # ---------------------------------------------------------------------------
+# Kept as a module-level constant so it is plainly static: the model path and
+# the output directory arrive through sys.argv, never through string
+# formatting. Interpolated, an output directory named
+# `out'); __import__('os').system('...')  #` would become code this process runs.
+_AUTOGPTQ_SCRIPT = """
+import sys
+from transformers import AutoTokenizer
+from auto_gptq import AutoGPTQForCausalLM, BaseQuantizeConfig
+
+hf_model, out_dir = sys.argv[1], sys.argv[2]
+bits, group_size = int(sys.argv[3]), int(sys.argv[4])
+
+tok = AutoTokenizer.from_pretrained(hf_model, use_fast=True)
+cfg = BaseQuantizeConfig(bits=bits, group_size=group_size, desc_act=False)
+m = AutoGPTQForCausalLM.from_pretrained(hf_model, cfg)
+examples = [tok('The quick brown fox jumps over the lazy dog.', return_tensors='pt')]
+m.quantize(examples)
+m.save_quantized(out_dir, use_safetensors=True)
+tok.save_pretrained(out_dir)
+"""
+
+
 def autogptq_quantize(hf_model: str, out_dir: str, *,
                       bits: int = 4, group_size: int = 128,
                       dataset: str = "c4", dry_run: bool = False) -> int:
@@ -81,18 +103,8 @@ def autogptq_quantize(hf_model: str, out_dir: str, *,
     Emit an AutoGPTQ quantization invocation. Requires `pip install auto-gptq
     optimum` and a CUDA GPU. Uses a small calibration dataset.
     """
-    script = (
-        "from transformers import AutoTokenizer; "
-        "from auto_gptq import AutoGPTQForCausalLM, BaseQuantizeConfig; "
-        f"tok=AutoTokenizer.from_pretrained('{hf_model}', use_fast=True); "
-        f"cfg=BaseQuantizeConfig(bits={bits}, group_size={group_size}, desc_act=False); "
-        f"m=AutoGPTQForCausalLM.from_pretrained('{hf_model}', cfg); "
-        "examples=[tok('The quick brown fox jumps over the lazy dog.', return_tensors='pt')]; "
-        "m.quantize(examples); "
-        f"m.save_quantized('{out_dir}', use_safetensors=True); "
-        f"tok.save_pretrained('{out_dir}')"
-    )
-    return _run([sys.executable, "-c", script], dry_run)
+    return _run([sys.executable, "-c", _AUTOGPTQ_SCRIPT,
+                 hf_model, out_dir, str(bits), str(group_size)], dry_run)
 
 
 # ---------------------------------------------------------------------------

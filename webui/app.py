@@ -16,6 +16,7 @@ Run:  uvicorn webui.app:app --host 127.0.0.1 --port 8090
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sys
@@ -23,7 +24,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from installer import hardware, recommend as rec, runtime  # noqa: E402
-from webui import chatstore, inference, imagegen, videogen, files  # noqa: E402
+from webui import auth, chatstore, inference, imagegen, videogen, files  # noqa: E402
 
 try:
     from fastapi import FastAPI, Request, File, UploadFile  # type: ignore
@@ -32,9 +33,53 @@ try:
 except Exception as exc:  # pragma: no cover
     raise SystemExit("FastAPI required: pip install fastapi uvicorn") from exc
 
-app = FastAPI(title="Local LLM Chat", version="2.0.0")
+
+@contextlib.asynccontextmanager
+async def lifespan(_app):
+    """Print the one URL that opens the app, then hand over to the server.
+
+    A lifespan handler rather than `@app.on_event("startup")`: on_event is
+    deprecated and warns on the FastAPI versions this project pins.
+
+    The token rides in the fragment, and fragments are never sent to a server —
+    so it reaches the page and goes no further, even though it is in a link.
+    """
+    host = os.environ.get("LLM_WEBUI_HOST", "127.0.0.1")
+    port = os.environ.get("LLM_WEBUI_PORT", "8090")
+    shown = "127.0.0.1" if host in ("0.0.0.0", "::", "*") else host
+    print(f"[webui] open: http://{shown}:{port}/#t={auth.get_token()}")
+    print(f"[webui] token file: {auth.TOKEN_FILE} (mode 0600)")
+    yield
+
+
+app = FastAPI(title="Local LLM Chat", version="2.0.0", lifespan=lifespan)
 MODELS_DIR = os.environ.get("LLM_MODELS_DIR", "models")
 _STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+
+
+# ---------------------------------------------------------------------------
+# Gate every request: Host allow-list first, then the access token on /api.
+#
+# One middleware rather than two, because the order is load-bearing — a
+# rebinding attempt must be refused before anything looks at its credentials —
+# and a single function makes that order impossible to get wrong later. See
+# webui/auth.py for what each gate actually stops.
+# ---------------------------------------------------------------------------
+@app.middleware("http")
+async def guard(request: Request, call_next):
+    if not auth.host_allowed(request.headers.get("host")):
+        return JSONResponse(
+            {"error": "unrecognised Host header — refusing to serve this "
+                      "request. Reach the app on localhost, or list the "
+                      "hostname in LLM_WEBUI_ALLOWED_HOSTS."},
+            status_code=421)
+    if request.url.path.startswith("/api/"):
+        reason = auth.authorize(request)
+        if reason:
+            return JSONResponse({"error": reason, "unauthorized": True},
+                                status_code=401)
+    return await call_next(request)
+
 
 # Task presets: each sets a system prompt + sampling temperature. Choosing a
 # task is how you point a conversation at "an LLM for a specific job".
@@ -52,6 +97,11 @@ TASK_PRESETS = {
 }
 
 chatstore.init_db()
+
+# Mint the token at import, before the socket is listening, so a supervisor
+# (bootstrap_install.sh, webui.sh) can read .webui_token the moment the app
+# answers and hand the user a URL that already works.
+auth.get_token()
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +188,23 @@ async def api_update_conversation(cid: str, request: Request) -> JSONResponse:
 
 @app.delete("/api/conversations/{cid}")
 def api_delete_conversation(cid: str) -> JSONResponse:
-    return JSONResponse({"ok": chatstore.delete_conversation(cid)})
+    """Delete a chat, its messages, and the files that were attached to it."""
+    deleted, paths = chatstore.delete_conversation(cid)
+    removed = 0
+    for path in paths:
+        # Only unlink inside the uploads directory. These paths come from our
+        # own rows, but a delete that follows a stored path anywhere on disk is
+        # one bad row away from removing something it shouldn't.
+        if not files.is_within_uploads(path):
+            continue
+        try:
+            os.remove(path)
+            removed += 1
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+    return JSONResponse({"ok": deleted, "attachments_removed": removed})
 
 
 # ---------------------------------------------------------------------------
@@ -370,11 +436,18 @@ async def api_video_generate(request: Request) -> JSONResponse:
     model_id = body.get("model_id")
     if not model_id:
         return JSONResponse({"error": "no video model selected"}, status_code=400)
-    # img2vid takes a source image uploaded via /api/attach (we reuse its saved path)
+    # img2vid takes a source image uploaded via /api/attach (we reuse its saved
+    # path). The client sends an attachment id, never a path — and the path we
+    # look up is confirmed to sit inside the uploads directory before it is
+    # handed to the worker, so a doctored row cannot aim the pipeline at an
+    # arbitrary file.
     source = None
     if body.get("source_image_id"):
         a = chatstore.get_attachment(body["source_image_id"])
-        source = a["path"] if a else None
+        candidate = a["path"] if a else None
+        if candidate and not files.is_within_uploads(candidate):
+            return JSONResponse({"error": "invalid source image"}, status_code=400)
+        source = candidate
     try:
         import anyio
         res = await anyio.to_thread.run_sync(

@@ -86,6 +86,13 @@ def docker_down(compose_file: str = "docker/docker-compose.yml",
 
 def docker_status(compose_file: str = "docker/docker-compose.yml") -> str:
     if not docker_available():
+        # Expected inside the manager container: the default compose service
+        # deliberately does not mount /var/run/docker.sock, because a panel
+        # that can drive the host's Docker daemon is a root shell on the host.
+        if os.path.exists("/.dockerenv"):
+            return ("docker status unavailable in this container "
+                    "(no Docker socket mounted — this is the safe default; "
+                    "see the manager-privileged compose profile)")
         return "docker not installed"
     r = subprocess.run(["docker", "compose", "-f", compose_file, "ps"],
                        capture_output=True, text=True)
@@ -146,25 +153,43 @@ def install_systemd_unit(name: str, exec_start: str, workdir: str, *,
 
 # ---------------------------------------------------------------------------
 # Server launch commands (documented, used by main.py "serve")
+#
+# Each entry is an argv *list*, not a string, so `serve` can hand it straight
+# to subprocess without a shell — a model path is a filesystem path the user
+# chose, and it has no business being re-parsed by sh.
+#
+# Bind addresses are loopback. These servers have no authentication of any
+# kind: a `--host 0.0.0.0` default publishes an unauthenticated inference
+# endpoint (and, for the web UIs, a file browser) to the whole network the
+# moment someone runs the printed command.
 # ---------------------------------------------------------------------------
 SERVE_COMMANDS = {
-    "llama.cpp": "third_party/llama.cpp/build/bin/llama-server "
-                 "-m {model} -c 4096 --host 0.0.0.0 --port 8080",
-    "vllm": "python -m vllm.entrypoints.openai.api_server "
-            "--model {model} --port 8000 --gpu-memory-utilization 0.90",
-    "tgi": "text-generation-launcher --model-id {model} --port 8081",
-    "text-generation-webui": "python server.py --model {model} "
-                             "--listen --api",
-    "sd-webui": "python launch.py --listen --api --xformers",
+    "llama.cpp": ["third_party/llama.cpp/build/bin/llama-server",
+                  "-m", "{model}", "-c", "4096",
+                  "--host", "127.0.0.1", "--port", "8080"],
+    "vllm": [sys.executable, "-m", "vllm.entrypoints.openai.api_server",
+             "--model", "{model}", "--host", "127.0.0.1", "--port", "8000",
+             "--gpu-memory-utilization", "0.90"],
+    "tgi": ["text-generation-launcher", "--model-id", "{model}",
+            "--hostname", "127.0.0.1", "--port", "8081"],
+    "text-generation-webui": [sys.executable, "server.py",
+                              "--model", "{model}", "--api"],
+    "sd-webui": [sys.executable, "launch.py", "--api", "--xformers"],
 }
 
 
-def serve_command(backend: str, model: str) -> str:
+def serve_argv(backend: str, model: str) -> List[str]:
+    """Return the launch command as an argv list with `model` substituted."""
     tmpl = SERVE_COMMANDS.get(backend)
     if not tmpl:
         raise KeyError(f"Unknown backend '{backend}'. "
                        f"Choose from {list(SERVE_COMMANDS)}")
-    return tmpl.format(model=model)
+    return [part.replace("{model}", model) for part in tmpl]
+
+
+def serve_command(backend: str, model: str) -> str:
+    """The same command, shell-quoted for display and for systemd's ExecStart."""
+    return " ".join(shlex.quote(part) for part in serve_argv(backend, model))
 
 
 if __name__ == "__main__":  # pragma: no cover

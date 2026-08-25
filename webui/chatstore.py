@@ -15,7 +15,7 @@ import os
 import sqlite3
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 _DB_PATH = os.environ.get("LLM_CHAT_DB") or os.path.join(
     os.environ.get("LLM_MODELS_DIR", "models"), "chat.db")
@@ -86,11 +86,27 @@ def _now() -> float:
     return time.time()
 
 
+def _restrict(path: str, mode: int) -> None:
+    """Best-effort chmod. Never fatal — a Windows or FAT mount has no bits."""
+    try:
+        os.chmod(path, mode)
+    except OSError:
+        pass
+
+
 def _connect() -> sqlite3.Connection:
-    os.makedirs(os.path.dirname(os.path.abspath(_DB_PATH)) or ".", exist_ok=True)
+    parent = os.path.dirname(os.path.abspath(_DB_PATH)) or "."
+    os.makedirs(parent, exist_ok=True)
+    fresh = not os.path.exists(_DB_PATH)
     conn = sqlite3.connect(_DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    if fresh:
+        # Every message, every uploaded document's extracted text and every
+        # configured endpoint lives in this file. sqlite3 creates it 0644, so
+        # on a shared machine any other account could simply read the lot.
+        # Tighten it once, at creation, rather than on every connect.
+        _restrict(_DB_PATH, 0o600)
     return conn
 
 
@@ -154,11 +170,62 @@ def touch_conversation(cid: str) -> None:
         conn.execute("UPDATE conversations SET updated_at=? WHERE id=?", (_now(), cid))
 
 
-def delete_conversation(cid: str) -> bool:
+def conversation_attachment_ids(cid: str) -> List[str]:
+    """Every attachment id this conversation refers to.
+
+    Two places to look, because /api/attach uploads a file before the turn it
+    belongs to exists: the row's own `conversation_id` (often NULL for exactly
+    that reason) and the JSON blob recorded on each user message. Reading only
+    the column would have missed nearly all of them.
+    """
+    ids: List[str] = []
+    seen = set()
     with _connect() as conn:
+        for (blob,) in conn.execute(
+                "SELECT attachments FROM messages WHERE conversation_id=? "
+                "AND attachments IS NOT NULL", (cid,)):
+            try:
+                for a in json.loads(blob) or []:
+                    aid = a.get("id")
+                    if aid and aid not in seen:
+                        seen.add(aid)
+                        ids.append(aid)
+            except (ValueError, AttributeError):
+                continue                      # a malformed blob is not fatal
+        for (aid,) in conn.execute(
+                "SELECT id FROM attachments WHERE conversation_id=?", (cid,)):
+            if aid not in seen:
+                seen.add(aid)
+                ids.append(aid)
+    return ids
+
+
+def delete_conversation(cid: str) -> Tuple[bool, List[str]]:
+    """Delete a conversation and everything hanging off it.
+
+    Returns (deleted, paths) — `paths` being the on-disk attachments removed,
+    for the caller to unlink. A tuple rather than just the list because an
+    empty list is ambiguous: a conversation with no attachments and one that
+    never existed would look identical.
+
+    Deleting a chat used to leave the uploaded documents on disk *and* their
+    extracted text, in full, in the database. That makes "delete" a promise the
+    app was not keeping.
+    """
+    aids = conversation_attachment_ids(cid)
+    paths: List[str] = []
+    with _connect() as conn:
+        for aid in aids:
+            row = conn.execute(
+                "SELECT path FROM attachments WHERE id=?", (aid,)).fetchone()
+            if row and row["path"]:
+                paths.append(row["path"])
         cur = conn.execute("DELETE FROM conversations WHERE id=?", (cid,))
         conn.execute("DELETE FROM messages WHERE conversation_id=?", (cid,))
-        return cur.rowcount > 0
+        for aid in aids:
+            conn.execute("DELETE FROM attachments WHERE id=?", (aid,))
+        deleted = cur.rowcount > 0
+    return deleted, (paths if deleted else [])
 
 
 # ---------------------------------------------------------------------------

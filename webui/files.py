@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from typing import Tuple
+from typing import Optional, Tuple
 
 MODELS_DIR = os.environ.get("LLM_MODELS_DIR", "models")
 UPLOAD_DIR = os.path.join(MODELS_DIR, "uploads")
@@ -42,12 +42,40 @@ def deps() -> dict:
 
 
 def save_upload(data: bytes, filename: str) -> str:
+    """Write an upload under UPLOAD_DIR and return its path.
+
+    Permissions are set at creation, not afterwards: between an open() and a
+    later chmod() the file exists and is world-readable, and these are
+    documents the user chose to hand to a *local* model.
+    """
     os.makedirs(UPLOAD_DIR, exist_ok=True)
+    try:
+        os.chmod(UPLOAD_DIR, 0o700)
+    except OSError:
+        pass
     safe = os.path.basename(filename or "file")
     path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4().hex[:8]}_{safe}")
-    with open(path, "wb") as fh:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as fh:
         fh.write(data)
     return path
+
+
+def is_within_uploads(path: Optional[str]) -> bool:
+    """True if `path` really resolves inside UPLOAD_DIR.
+
+    Compared after resolving symlinks, because `uploads/x -> /etc/shadow` and
+    `uploads/../../etc/shadow` both pass a plain prefix test on the string.
+    Used wherever a client-supplied path reaches the filesystem.
+    """
+    if not path:
+        return False
+    try:
+        root = os.path.realpath(UPLOAD_DIR)
+        target = os.path.realpath(path)
+    except OSError:
+        return False
+    return os.path.commonpath([root, target]) == root and target != root
 
 
 def _pdf_text(path: str) -> str:

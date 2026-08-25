@@ -7,12 +7,22 @@ WORKDIR /app
 # `requests` powers the OpenAI-compatible chat proxy; chat history is sqlite3
 # (stdlib). Point the app at a reachable /v1 endpoint via the in-app settings.
 RUN pip install --upgrade pip && \
-    pip install "fastapi==0.115.*" "uvicorn[standard]==0.32.*" \
-                "requests==2.*" "psutil==6.*" "pynvml==11.*"
+    pip install "fastapi>=0.115,<1.0" "uvicorn[standard]>=0.32,<1.0" \
+                "requests>=2.31,<3.0" "psutil>=6.0,<8.0" "pynvml>=11.5,<13.0"
 
 COPY installer/ /app/installer/
 COPY webui/ /app/webui/
 COPY models_manifest.json /app/
 
+# Run as a normal user. The panel takes uploads and renders model output; if
+# any of that ever turns into code execution, it should not land as root. The
+# uid is fixed at 10001 so the host-mounted ./models has a stable owner to
+# grant — chown it to 10001 if the container cannot write there.
+RUN useradd --create-home --uid 10001 app && \
+    mkdir -p /app/models && chown -R app:app /app
+USER app
+
 EXPOSE 8090
+# Binds 0.0.0.0 *inside the container only*; the compose file publishes it to
+# 127.0.0.1 on the host, so this is not a network exposure.
 CMD ["uvicorn", "webui.app:app", "--host", "0.0.0.0", "--port", "8090"]

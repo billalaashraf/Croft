@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from typing import Any, Dict, List, Optional
 
@@ -152,19 +153,47 @@ def cmd_pull(args) -> int:
         if not confirm("Have you accepted the license and set a token?", args.yes):
             return 1
     dest_dir = os.path.join(MODELS_DIR, m.id)
-    info(f"Downloading {m.hf_repo} → {dest_dir}  (~{m.approx_disk_gb:g} GB)")
+    source = m.download_url or m.hf_repo
+    info(f"Downloading {source} → {dest_dir}  (~{m.approx_disk_gb:g} GB)")
+    if m.download_url and m.integrity_sha256:
+        info(f"   integrity: SHA256 {m.integrity_sha256}")
+    elif m.download_url:
+        info("   ⚠ no SHA256 published for this entry — the file cannot be verified.")
     if not confirm(f"Proceed with download of ~{m.approx_disk_gb:g} GB?", args.yes):
         return 1
+
     try:
-        downloader.hf_download(m.hf_repo, dest_dir, token=args.token,
-                               dry_run=args.dry_run)
+        if m.download_url:
+            # A direct single-file URL is the only route that verifies a hash
+            # *we* published. Going through the hub instead leaves
+            # integrity_sha256 dead code, which is how it sat unused before.
+            #
+            # No makedirs here: http_download creates the parent itself, and
+            # only after its own dry-run check. Creating it up front would have
+            # made --dry-run leave a directory behind.
+            dest = os.path.join(dest_dir, os.path.basename(
+                m.download_url.split("?", 1)[0]))
+            downloader.http_download(
+                m.download_url, dest,
+                expected_sha256=m.integrity_sha256,
+                token=args.token or os.environ.get("HF_TOKEN"),
+                dry_run=args.dry_run,
+                progress=None if args.dry_run else downloader.cli_progress)
+        else:
+            downloader.hf_download(m.hf_repo, dest_dir, token=args.token,
+                                   allow_patterns=m.hf_allow_patterns,
+                                   dry_run=args.dry_run)
     except Exception as exc:
         info(f"✗ Download failed: {exc}")
         return 1
+
     state = _load_state()
     state["models"][m.id] = {"repo": m.hf_repo, "path": dest_dir,
                              "kind": m.kind, "format": m.format,
-                             "license": m.license}
+                             "license": m.license,
+                             "source_url": m.download_url or
+                             f"https://huggingface.co/{m.hf_repo}",
+                             "integrity_sha256": m.integrity_sha256}
     if not args.dry_run:
         _save_state(state)
     info(f"✓ {m.id} ready in {dest_dir}")
@@ -191,12 +220,15 @@ def cmd_quantize(args) -> int:
 
 
 def cmd_serve(args) -> int:
-    cmd = runtime.serve_command(args.backend, args.model)
-    info(f"Serve command:\n  {cmd}")
+    argv = runtime.serve_argv(args.backend, args.model)
+    info("Serve command:\n  " + runtime.serve_command(args.backend, args.model))
     if args.run:
         if not confirm("Launch this server now?", args.yes):
             return 1
-        os.system(cmd)  # noqa: S605 (explicit user-confirmed launch)
+        # No shell. The model path comes from the command line and may contain
+        # spaces, quotes or a `;`; handing it to sh would let a path decide
+        # what runs.
+        return subprocess.run(argv, check=False).returncode
     return 0
 
 

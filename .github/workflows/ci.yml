@@ -1,0 +1,110 @@
+name: CI
+
+# Runs on the two platforms the bootstrap actually claims to support and can be
+# tested here. Windows support means WSL2, which GitHub's windows runners do
+# not provide, so it is verified by hand — see docs/COMPATIBILITY.md.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install dependencies
+        # requirements.txt, not the lock: the lock is one resolution on one
+        # platform, and the point of this matrix is to catch the day an
+        # unbounded dependency stops working on a platform we support.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest httpx
+
+      - name: Unit tests
+        run: pytest -q
+
+      - name: Bootstrap shell tests
+        # Covers the two things pytest cannot: that sha256_check works with
+        # whichever hashing tool the platform ships (macOS has no sha256sum),
+        # and that --dry-run really writes nothing.
+        run: |
+          chmod +x tests/test_bootstrap.sh
+          ./tests/test_bootstrap.sh
+
+      - name: Bootstrap dry-run smoke test
+        env:
+          LLM_NO_WEBUI: "1"
+          LLM_NO_ENGINES: "1"
+        run: |
+          chmod +x bootstrap_install.sh
+          ./bootstrap_install.sh --dry-run --yes --mode native
+
+  lint:
+    name: shellcheck + import check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck
+        # This is the check that would have caught the `eval "$@"` and the
+        # macOS `sha256sum` portability break mechanically, before review.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          shellcheck --severity=warning \
+            bootstrap_install.sh webui.sh tests/test_bootstrap.sh
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Byte-compile every module
+        run: python -m compileall -q installer webui tests
+
+      - name: Manifest is valid JSON and fully specified
+        run: |
+          pip install -r requirements.txt pytest httpx
+          pytest -q tests/test_manifest.py tests/test_downloader_routing.py
+
+  lockfile:
+    name: requirements.lock installs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # The interpreter the lock was resolved on. A `pip freeze` set is
+          # specific to a Python version as well as a platform, so holding the
+          # version constant is what makes the *platform* axis (resolved on
+          # macOS, installed here on Linux) the thing this job actually tests.
+          python-version: "3.14"
+      - name: Install from the pinned set
+        # The lock is what a fresh bootstrap prefers, so a lock that cannot
+        # install is a broken install for every new user.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.lock
+          python -c "import fastapi, huggingface_hub, requests, rich; print('ok')"

@@ -93,3 +93,54 @@ exceeds VRAM, it recommends the frame-by-frame fallback; if a text model
 exceeds VRAM, it drops to the GGUF/CPU variant (measured against system RAM
 instead of VRAM). This is what `installer/recommend.py::recommend()` encodes in
 the `on_cpu` branch and the `fits` flag.
+
+## Platform support
+
+| Platform | Status | Accelerator | Verified by |
+|---|---|---|---|
+| Linux (x86-64) | Supported | CUDA, ROCm, CPU | CI (`ubuntu-latest`) |
+| macOS (Apple Silicon) | Supported | Metal / MPS, CPU | CI (`macos-latest`) |
+| macOS (Intel) | Supported | CPU | not in CI |
+| Windows **via WSL2** | Supported | CUDA through the host driver, CPU | by hand — no WSL2 on GitHub runners |
+| Windows, natively | **Not supported** | — | — |
+
+### What "Windows support" means
+
+It means WSL2, and only WSL2. `bootstrap_install.ps1` checks that WSL is
+installed and that your **default distro is version 2** (offering to install or
+convert it), hands off to `bootstrap_install.sh` inside WSL, and then smoke-
+tests the result rather than assuming the handoff worked.
+
+Native Windows is out of scope because the inference stacks this project
+installs — vLLM, TGI, and the CUDA/Metal builds of llama.cpp — have no
+native-Windows support. CUDA reaches WSL through the **host** NVIDIA driver, so
+install that driver on Windows, not inside the distro. Windows forwards
+`localhost` into WSL2, so the URL the bootstrap prints opens in a Windows
+browser unchanged.
+
+A WSL**1** distro will run the shell script quite happily and then fail at the
+first CUDA call, a long way from the cause — which is why the version is
+checked up front rather than discovered later.
+
+### Daemonising
+
+| Platform | Mechanism | File |
+|---|---|---|
+| Linux | systemd user units | `services/local-llm-*.service` |
+| macOS | launchd user agent | `services/local-llm-manager.plist` |
+| WSL2 | `./webui.sh start` | systemd in WSL depends on your distro's config |
+
+The `.service` files are Linux-only; macOS has no systemd, so the launchd
+template is the equivalent. Both default to user scope and bind to loopback.
+
+### Portability notes for the scripts
+
+- `bootstrap_install.sh` and `webui.sh` are POSIX/bash and never run on native
+  Windows. Their `bin/` paths are correct on Linux and macOS; the Windows path
+  runs them *inside* WSL, where those paths are also correct.
+- SHA256 verification goes through a helper that tries `sha256sum`, then
+  `shasum -a 256`, then `openssl dgst`. Stock macOS has no `sha256sum`, so the
+  GNU-only form failed the tarball checksum on every Mac.
+- WSL is detected inside the `Linux)` arm of the platform `case`, because
+  `uname -s` reports Linux there. A separate fallback arm for WSL is
+  unreachable code.
