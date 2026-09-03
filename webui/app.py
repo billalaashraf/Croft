@@ -1,5 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Bilal Ashraf
 """
-webui/app.py — Local LLM Chat web app.
+webui/app.py — Croft web app.
 
 A complete local chat interface plus the original status/manager panel:
 
@@ -23,7 +25,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from installer import hardware, recommend as rec, runtime  # noqa: E402
+from installer import __version__, hardware, recommend as rec, runtime  # noqa: E402
 from webui import auth, chatstore, inference, imagegen, videogen, files  # noqa: E402
 
 try:
@@ -52,7 +54,7 @@ async def lifespan(_app):
     yield
 
 
-app = FastAPI(title="Local LLM Chat", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="Croft", version=__version__, lifespan=lifespan)
 MODELS_DIR = os.environ.get("LLM_MODELS_DIR", "models")
 _STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
@@ -521,6 +523,22 @@ def api_service(action: str, service: str) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
+# Liveness
+# ---------------------------------------------------------------------------
+@app.get("/healthz")
+def healthz() -> JSONResponse:
+    """Is the app up? Deliberately outside `/api`, so it needs no token.
+
+    A container healthcheck has no way to hold a secret, and giving it one would
+    mean minting a credential whose only job is to be readable by anything that
+    can run `docker inspect`. This returns the version and nothing else — no
+    hardware report, no model list, no paths — so it is safe unauthenticated.
+    The Host allow-list still applies, so it is only reachable as localhost.
+    """
+    return JSONResponse({"status": "ok", "version": __version__})
+
+
+# ---------------------------------------------------------------------------
 # Pages
 # ---------------------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
@@ -542,7 +560,7 @@ def manager() -> str:
         for v in vram) or "<tr><td colspan=2>CPU-only / no NVML</td></tr>"
     gpus = ", ".join(g["name"] for g in hw["gpus"]) or "none"
     return f"""<!doctype html><html><head><meta charset=utf-8>
-<title>Local LLM Chat — Manager</title>
+<title>Croft — Manager</title>
 <style>
  body{{font-family:system-ui,sans-serif;margin:2rem;max-width:900px;color:#111}}
  a{{color:#2563eb}} h1{{font-size:1.4rem}}
@@ -552,7 +570,7 @@ def manager() -> str:
  .pill{{background:#eef;padding:.2rem .5rem;border-radius:6px;font-size:.8rem}}
 </style></head><body>
 <p><a href="/">← Back to chat</a></p>
-<h1>Local LLM Chat — Manager</h1>
+<h1>Croft — Manager</h1>
 <p><span class=pill>OS: {hw['os']}</span> <span class=pill>accel: {hw['accelerator']}</span>
  <span class=pill>RAM: {hw['ram_total_gb']} GB</span>
  <span class=pill>VRAM: {hw['total_vram_gb']} GB</span>

@@ -1,0 +1,34 @@
+# croft-manager.service — systemd unit for the FastAPI status/control panel.
+#
+# Linux only. On macOS use ./webui.sh start, or the launchd template in
+# services/croft-manager.plist.
+#
+#   cp services/croft-manager.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now croft-manager
+#   # then open the URL the app logs on startup — it carries the access token:
+#   journalctl --user -u croft-manager | grep 'open:'
+
+[Unit]
+Description=Croft — manager web UI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/croft
+Environment=LLM_MODELS_DIR=%h/croft/models
+# Loopback. This panel can start and stop services; a 0.0.0.0 bind published it
+# to the whole network. To reach it from another machine, set LLM_WEBUI_HOST
+# AND LLM_WEBUI_ALLOWED_HOSTS here and read docs/SECURITY.md first.
+# Through the interpreter, not %h/croft/.venv/bin/uvicorn. A console script
+# bakes the absolute path of the venv that created it into its shebang, so
+# moving or renaming the checkout leaves that file present but unrunnable —
+# systemd reports 203/EXEC and nothing says why. `python -m` survives it.
+ExecStart=%h/croft/.venv/bin/python -m uvicorn webui.app:app --host 127.0.0.1 --port 8090
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=full
+
+[Install]
+WantedBy=default.target

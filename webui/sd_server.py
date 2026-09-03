@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Bilal Ashraf
 """
 webui/sd_server.py — the diffusion worker: image and video, in its own process.
 

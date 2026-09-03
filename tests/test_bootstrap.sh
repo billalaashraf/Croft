@@ -42,7 +42,7 @@ source "$WORK/helpers.sh"
 set +eu +o pipefail
 
 # --- sha256_check ------------------------------------------------------------
-printf 'local-llm-chat integrity test' > "$WORK/blob.bin"
+printf 'croft integrity test' > "$WORK/blob.bin"
 # Computed independently of the helper, so a broken helper cannot agree with
 # itself. Falls back the same way the helper does, for the same portability
 # reason.
@@ -58,8 +58,11 @@ check $? "sha256_check accepts a matching hash"
 sha256_check "$(printf '%s' "$EXPECTED" | tr 'a-f' 'A-F')" "$WORK/blob.bin"
 check $? "sha256_check is case-insensitive (hashes get pasted in uppercase)"
 
-sha256_check "$(printf '0%.0s' {1..64})" "$WORK/blob.bin"
-[ $? -ne 0 ]; check $? "sha256_check rejects a mismatching hash"
+if sha256_check "$(printf '0%.0s' {1..64})" "$WORK/blob.bin"; then
+  bad "sha256_check rejects a mismatching hash"
+else
+  ok "sha256_check rejects a mismatching hash"
+fi
 
 # The bug this replaced: `sha256sum -c` is GNU-only and absent on stock macOS.
 if grep -q 'sha256sum -c' "$BOOTSTRAP"; then
@@ -77,6 +80,9 @@ fi
 
 # An argument that would be catastrophic under eval must survive as one word.
 marker="$WORK/pwned"
+# Read by the run() sourced from bootstrap_install.sh, which shellcheck cannot
+# see from this file.
+# shellcheck disable=SC2034
 DRY_RUN=0
 run printf '%s\n' "; touch $marker" > "$WORK/out.txt"
 if [ -e "$marker" ]; then

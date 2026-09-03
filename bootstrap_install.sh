@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# bootstrap_install.sh — cross-platform bootstrap for Local LLM Chat.
+# bootstrap_install.sh — cross-platform bootstrap for Croft.
 #
 #   * Detects OS/arch and available accelerators.
 #   * Prompts for install mode (docker | native) unless --mode is given.
@@ -21,7 +21,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 MODE=""
 ASSUME_YES=0
 DRY_RUN=0
-REPO_URL="${LLM_REPO_URL:-https://github.com/example/local-llm-chat}"
+REPO_URL="${LLM_REPO_URL:-https://github.com/billalaashraf/Croft}"
 PKG_URL="${LLM_PKG_URL:-}"                 # optional tarball URL
 PKG_SHA256="${LLM_PKG_SHA256:-}"           # expected checksum of the tarball
 
@@ -30,14 +30,14 @@ PKG_SHA256="${LLM_PKG_SHA256:-}"           # expected checksum of the tarball
 #   2. The script's own directory when it already contains the installer —
 #      i.e. it's being run from inside a real checkout, so install in place
 #      and skip any fetch/clone.
-#   3. $HOME/local-llm-chat as the remote-bootstrap fallback.
+#   3. $HOME/croft as the remote-bootstrap fallback.
 # A --dir argument (parsed below) still overrides all of these.
 if [ -n "${LLM_INSTALL_DIR:-}" ]; then
   INSTALL_DIR="$LLM_INSTALL_DIR"
 elif [ -f "$SCRIPT_DIR/installer/main.py" ]; then
   INSTALL_DIR="$SCRIPT_DIR"
 else
-  INSTALL_DIR="$HOME/local-llm-chat"
+  INSTALL_DIR="$HOME/croft"
 fi
 
 log()  { printf '\033[1;34m[bootstrap]\033[0m %s\n' "$*"; }
@@ -286,15 +286,15 @@ fetch_package() {
   mkdir -p "$INSTALL_DIR"
   if [ -n "$PKG_URL" ]; then
     log "Downloading installer package: $PKG_URL"
-    run curl -fL --retry 5 -C - -o /tmp/local-llm.tar.gz "$PKG_URL"
+    run curl -fL --retry 5 -C - -o /tmp/croft.tar.gz "$PKG_URL"
     if [ -n "$PKG_SHA256" ] && [ "$DRY_RUN" -eq 0 ]; then
-      sha256_check "$PKG_SHA256" /tmp/local-llm.tar.gz \
+      sha256_check "$PKG_SHA256" /tmp/croft.tar.gz \
         || { err "Checksum verification FAILED — aborting."; exit 1; }
       log "Checksum verified."
     else
       warn "No PKG_SHA256 provided — skipping integrity check (not recommended)."
     fi
-    run tar -xzf /tmp/local-llm.tar.gz -C "$INSTALL_DIR" --strip-components=1
+    run tar -xzf /tmp/croft.tar.gz -C "$INSTALL_DIR" --strip-components=1
   else
     log "No package URL set; cloning repo: $REPO_URL"
     run git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
@@ -507,6 +507,10 @@ EOF
     printf '\n===== %s models =====\n' \
            "$(printf '%s' "$kind" | tr '[:lower:]' '[:upper:]')"
     i=0
+    # `idx` and `kk` are columns this loop does not use — the number shown is
+    # the display counter `i`, and the kind is already known from `$kind` — but
+    # `read` still has to consume them to reach the fields after.
+    # shellcheck disable=SC2034
     while IFS=$'\t' read -r idx id kk fits params disk lic gated; do
       i=$((i + 1))
       mark="$(status_tag "$id" "$fits")"

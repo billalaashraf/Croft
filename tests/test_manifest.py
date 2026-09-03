@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Bilal Ashraf
 """
 pytest stubs for manifest parsing + downloader integrity logic.
 """
@@ -51,7 +53,7 @@ def test_load_manifest_merges_into_catalog():
 # --- downloader integrity ---------------------------------------------------
 def test_sha256_and_verify(tmp_path):
     f = tmp_path / "blob.bin"
-    payload = b"local-llm-chat integrity test"
+    payload = b"croft integrity test"
     f.write_bytes(payload)
     digest = hashlib.sha256(payload).hexdigest()
     assert downloader.sha256_file(str(f)) == digest

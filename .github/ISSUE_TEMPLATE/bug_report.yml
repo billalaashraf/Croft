@@ -1,0 +1,82 @@
+name: Bug report
+description: Something in Croft does not work
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The hardware report and version below answer most
+        of the follow-up questions we would otherwise have to ask.
+
+        **Security issue?** Do not file it here — use
+        [private vulnerability reporting](https://github.com/billalaashraf/Croft/security/advisories/new).
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead.
+      placeholder: |
+        Ran ./bootstrap_install.sh and picked the sdxl-turbo image model.
+        Expected the download to start; instead it exited with …
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Fresh clone
+        2. ./bootstrap_install.sh --mode native
+        3. Choose option 2 at the image picker
+    validations:
+      required: true
+
+  - type: textarea
+    id: hardware
+    attributes:
+      label: Hardware report
+      description: "Output of `python3 -m installer.main detect` — it is JSON, and contains no personal data."
+      render: json
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Croft version
+      description: "`python3 -c 'import installer; print(installer.__version__)'`, or the commit SHA."
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Linux
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Windows via WSL2
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Install mode
+      options:
+        - native (virtualenv)
+        - docker
+        - not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: "From `webui.log`, `sdworker.log`, or the terminal. Redact your token if a URL with `#t=` appears."
+      render: shell

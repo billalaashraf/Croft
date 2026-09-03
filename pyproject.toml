@@ -1,0 +1,94 @@
+# Croft — packaging metadata.
+#
+# The version is NOT repeated here. `dynamic = ["version"]` points setuptools at
+# installer/__init__.py, so `__version__` there is the only line to bump.
+#
+# Runtime dependencies deliberately mirror requirements.txt rather than replacing
+# it: bootstrap_install.sh installs from the requirements files (it needs to work
+# before this package is installed), while `pip install -e .` is for contributors.
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "croft"
+description = "Local-first installer and chat/image/video studio for self-hosted models"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Bilal Ashraf" }]
+keywords = ["llm", "local", "self-hosted", "diffusers", "llama.cpp", "installer"]
+dynamic = ["version"]
+
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: MacOS :: MacOS X",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# The download-critical core. Upper bounds are the ones documented in
+# requirements.txt: these are the APIs the code calls directly.
+dependencies = [
+  "psutil>=5.9,<8.0",
+  "py-cpuinfo>=9.0,<10.0",
+  "huggingface_hub>=0.25,<1.0",
+  "requests>=2.31,<3.0",
+  "rich>=13.7,<15.0",
+  "typer>=0.12,<1.0",
+]
+
+[project.optional-dependencies]
+# The web app. Kept separate so a headless install (CLI + downloads only) does
+# not drag in a server stack.
+webui = [
+  "fastapi>=0.110,<1.0",
+  "uvicorn[standard]>=0.27,<1.0",
+  "python-multipart>=0.0.9",
+  "pypdf>=4.0",
+  "python-docx>=1.1",
+]
+# Inference engines. Unpinned torch/diffusers are intentionally NOT here: they
+# are large, platform-specific, and installed by bootstrap_install.sh with the
+# transformers<5 constraint that keeps them compatible with huggingface_hub<1.0.
+dev = [
+  "pytest>=8.0",
+  "httpx>=0.27",
+  "coverage>=7.4",
+]
+
+[project.urls]
+Homepage = "https://github.com/billalaashraf/Croft"
+Repository = "https://github.com/billalaashraf/Croft"
+Issues = "https://github.com/billalaashraf/Croft/issues"
+Changelog = "https://github.com/billalaashraf/Croft/blob/main/CHANGELOG.md"
+
+[project.scripts]
+# `croft recommend` instead of `python3 -m installer.main recommend`.
+croft = "installer.main:main"
+
+[tool.setuptools]
+packages = ["installer", "webui"]
+
+[tool.setuptools.dynamic]
+version = { attr = "installer.__version__" }
+
+[tool.setuptools.package-data]
+webui = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.coverage.run]
+source = ["installer", "webui"]
+omit = ["*/__pycache__/*"]

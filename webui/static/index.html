@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Local LLM Chat</title>
+<title>Croft</title>
 <style>
 :root{
   --bg:#f6f3ec; --surface:#fffdf8; --surface-2:#efeadf; --ink:#211d16;
@@ -317,7 +317,7 @@ select.pick:focus{outline:none;border-color:var(--accent)}
     <!-- Chat view -->
     <div id="chatView">
       <div class="top">
-        <div class="title" id="convTitle">Local LLM Chat</div>
+        <div class="title" id="convTitle">Croft</div>
         <div class="sel"><label for="modelPick">model</label><select class="pick" id="modelPick"></select></div>
         <div class="sel"><label for="taskPick">task</label><select class="pick" id="taskPick"></select></div>
         <button class="iconbtn" id="openSettings" title="Endpoints & settings" aria-label="Settings">
@@ -569,7 +569,7 @@ async function openConv(id){
 }
 async function delConv(id){
   await fetch('/api/conversations/'+id,{method:'DELETE'});
-  if(state.current&&state.current.id===id){ state.current=null; $('#convTitle').textContent='Local LLM Chat'; }
+  if(state.current&&state.current.id===id){ state.current=null; $('#convTitle').textContent='Croft'; }
   await refreshConvos(); renderThread();
 }
 function newChat(){ state.current=null; state.pending=[]; renderPending(); $('#convTitle').textContent='New chat'; renderConvos(); renderThread(); $('#input').focus(); }

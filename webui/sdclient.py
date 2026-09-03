@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Bilal Ashraf
 """
 webui/sdclient.py — the web app's side of the diffusion worker link.
 

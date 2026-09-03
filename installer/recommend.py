@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Bilal Ashraf
 """
 recommend.py — Model compatibility engine.
 
@@ -19,6 +21,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import sys
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -65,6 +68,10 @@ class ModelEntry:
     # Glob filter for snapshot downloads. A GGUF repo holds every quantisation,
     # so pulling one unfiltered fetches many times the advertised size.
     hf_allow_patterns: Optional[List[str]] = None
+    # Commit SHA to download. `main` moves and can be force-pushed, so an
+    # unpinned snapshot means two people installing the same model id weeks
+    # apart can get different weights. None falls back to "main".
+    revision: Optional[str] = None
 
     def required_gb(self) -> float:
         mult = OVERHEAD_MULT
@@ -165,9 +172,16 @@ def load_manifest(path: str = "models_manifest.json") -> List[ModelEntry]:
                     download_url=e.get("download_url"),
                     integrity_sha256=e.get("integrity_sha256"),
                     hf_allow_patterns=patterns,
+                    revision=e.get("revision"),
                 )
-        except Exception:
-            pass  # malformed manifest -> silently fall back to defaults
+        except Exception as exc:
+            # Falling back to the built-in catalog is right — a bad manifest
+            # should not brick the installer. Doing it silently is not: adding
+            # a custom model is a documented workflow, and a typo there used to
+            # look exactly like an entry that simply never appeared.
+            print(f"[recommend] warning: could not read {path} ({exc}); "
+                  f"using the built-in catalog. Custom models in that file "
+                  f"will not be listed until it parses.", file=sys.stderr)
     return list(catalog.values())
 
 

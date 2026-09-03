@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Bilal Ashraf
 """
-main.py — Local LLM Chat installer & manager (CLI/TUI orchestrator).
+main.py — Croft installer & manager (CLI/TUI orchestrator).
 
 Subcommands:
     detect       Print the hardware capability report (JSON).
@@ -180,7 +182,10 @@ def cmd_pull(args) -> int:
                 dry_run=args.dry_run,
                 progress=None if args.dry_run else downloader.cli_progress)
         else:
+            # A pinned revision is what makes this reproducible; "main" is only
+            # the fallback for an entry that predates the pin.
             downloader.hf_download(m.hf_repo, dest_dir, token=args.token,
+                                   revision=m.revision or "main",
                                    allow_patterns=m.hf_allow_patterns,
                                    dry_run=args.dry_run)
     except Exception as exc:
@@ -193,6 +198,10 @@ def cmd_pull(args) -> int:
                              "license": m.license,
                              "source_url": m.download_url or
                              f"https://huggingface.co/{m.hf_repo}",
+                             # Recorded so `installed.json` says exactly which
+                             # commit produced these weights, not just which
+                             # repo they came from.
+                             "revision": m.revision,
                              "integrity_sha256": m.integrity_sha256}
     if not args.dry_run:
         _save_state(state)
@@ -316,8 +325,8 @@ def cmd_uninstall(args) -> int:
 # ---------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="local-llm",
-        description="Local LLM Chat installer & manager")
+        prog="croft",
+        description="Croft installer & manager")
     p.add_argument("--dry-run", action="store_true",
                    help="preview actions without downloading or changing the system")
     p.add_argument("--yes", "-y", action="store_true",

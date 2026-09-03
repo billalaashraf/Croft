@@ -126,8 +126,8 @@ checked up front rather than discovered later.
 
 | Platform | Mechanism | File |
 |---|---|---|
-| Linux | systemd user units | `services/local-llm-*.service` |
-| macOS | launchd user agent | `services/local-llm-manager.plist` |
+| Linux | systemd user units | `services/croft-*.service` |
+| macOS | launchd user agent | `services/croft-manager.plist` |
 | WSL2 | `./webui.sh start` | systemd in WSL depends on your distro's config |
 
 The `.service` files are Linux-only; macOS has no systemd, so the launchd

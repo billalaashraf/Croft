@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Bilal Ashraf
 """
 runtime.py — Runtime environment + service orchestration.
 
@@ -103,7 +105,7 @@ def docker_status(compose_file: str = "docker/docker-compose.yml") -> str:
 # systemd (server mode)
 # ---------------------------------------------------------------------------
 SYSTEMD_TEMPLATE = """[Unit]
-Description=Local LLM Chat — {name}
+Description=Croft — {name}
 After=network-online.target
 Wants=network-online.target
 
@@ -139,7 +141,7 @@ def install_systemd_unit(name: str, exec_start: str, workdir: str, *,
             return None
         unit_dir = "/etc/systemd/system"
         ctl = ["sudo", "systemctl"]
-    unit_path = os.path.join(unit_dir, f"local-llm-{name}.service")
+    unit_path = os.path.join(unit_dir, f"croft-{name}.service")
     if dry_run:
         print(f"[dry-run] write unit -> {unit_path}\n{unit}")
     else:
@@ -147,7 +149,7 @@ def install_systemd_unit(name: str, exec_start: str, workdir: str, *,
         with open(unit_path, "w", encoding="utf-8") as fh:
             fh.write(unit)
     _run(ctl + ["daemon-reload"], dry_run)
-    _run(ctl + ["enable", "--now", f"local-llm-{name}.service"], dry_run)
+    _run(ctl + ["enable", "--now", f"croft-{name}.service"], dry_run)
     return unit_path
 
 

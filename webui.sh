@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# webui.sh — start / stop / restart / status / logs for the Local LLM Chat web app.
+# webui.sh — start / stop / restart / status / logs for the Croft web app.
 #
 #   ./webui.sh start          # launch in the background
 #   ./webui.sh stop           # stop it

@@ -4,10 +4,10 @@
 # and a small FastAPI wrapper. For the full AUTOMATIC1111 GUI, prefer the
 # prebuilt `sd-webui` service in docker-compose.yml instead.
 #
-#   docker build -f docker/Dockerfile.sd -t local-llm/sd:diffusers .
-#   docker run --gpus all -p 7862:7862 -v $PWD/models:/models local-llm/sd:diffusers
+#   docker build -f docker/Dockerfile.sd -t croft/sd:diffusers .
+#   docker run --gpus all -p 7862:7862 -v $PWD/models:/models croft/sd:diffusers
 
-FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04
+FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04@sha256:af8bd179ed3bf69d4b63b19a763662a6141f0f62ef099283f68d0b14b4bab0e3
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \

@@ -1,4 +1,4 @@
-# docker-compose.yml — Local LLM Chat stack.
+# docker-compose.yml — Croft stack.
 #
 # Services:
 #   text-tgi   : Hugging Face Text Generation Inference (high-perf GPU server)
@@ -37,7 +37,7 @@ x-gpu: &gpu
 services:
   # --- High-performance text server (GPU) ---
   text-tgi:
-    image: ghcr.io/huggingface/text-generation-inference:2.4.0
+    image: ghcr.io/huggingface/text-generation-inference:2.4.0@sha256:2854707839790cd8b48a1838165ec35227016bb2cb15993fa896653c35d9031e
     <<: *gpu
     environment:
       - MODEL_ID=${TEXT_MODEL_ID:-mistralai/Mistral-7B-Instruct-v0.2}
@@ -51,11 +51,19 @@ services:
       - "127.0.0.1:8081:80"
     shm_size: "1g"
     restart: unless-stopped
+    # A model server is "up" long before it can answer: TGI loads and shards the
+    # weights first. start_period is what stops that being reported as failure.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:80/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 300s
     profiles: ["text", "gpu"]
 
   # --- CPU-only text server (llama.cpp, GGUF) ---
   text-llamacpp:
-    image: ghcr.io/ggerganov/llama.cpp:server
+    image: ghcr.io/ggml-org/llama.cpp:server@sha256:3d05996b4956a27f26f108827b8f24eea392e91eaab8114138424e92443903df
     command: >
       -m /models/${GGUF_FILE:-mistral-7b-q4/mistral-7b-instruct-v0.2.Q4_K_M.gguf}
       -c 4096 --host 0.0.0.0 --port 8080
@@ -64,11 +72,17 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
     profiles: ["text", "cpu"]
 
   # --- Friendly text GUI + API ---
   text-webui:
-    image: atinoda/text-generation-webui:default
+    image: atinoda/text-generation-webui:default@sha256:186811c1427add4c209a816713dda0ebd6fa0b3a709e89f9a72002a24e14172c
     <<: *gpu
     environment:
       - EXTRA_LAUNCH_ARGS=--listen --api --model ${TEXT_MODEL_ID:-}
@@ -78,11 +92,17 @@ services:
       - "127.0.0.1:7860:7860"   # UI
       - "127.0.0.1:5000:5000"   # OpenAI-compatible API
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:7860/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 300s
     profiles: ["text-gui", "gpu"]
 
   # --- Stable Diffusion web UI (images) ---
   sd-webui:
-    image: universonic/stable-diffusion-webui:latest
+    image: universonic/stable-diffusion-webui:latest@sha256:f89a39d72f069f909f75aec5144c446d11c01833d1d80bf44e964cd9b8812a71
     <<: *gpu
     # No --enable-insecure-extension-access: it lets anything that can reach
     # this port install and run arbitrary extension code inside the container.
@@ -94,6 +114,12 @@ services:
     ports:
       - "127.0.0.1:7861:7860"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:7860/internal/ping || curl -fsS http://localhost:7860/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 300s
     profiles: ["image", "gpu"]
 
   # --- Management / status panel ---
@@ -118,6 +144,13 @@ services:
     ports:
       - "127.0.0.1:8090:8090"
     restart: unless-stopped
+    # /healthz is deliberately outside /api, so the check needs no access token.
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8090/healthz', timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     profiles: ["manager"]
 
   # --- Management panel WITH host Docker control (opt in deliberately) ---

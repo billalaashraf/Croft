@@ -1,6 +1,6 @@
 # Security
 
-This document states what Local LLM Chat defends against, what it does not,
+This document states what Croft defends against, what it does not,
 and what changes if you move it off its defaults. It is written to be read
 before you expose anything, not after.
 
@@ -17,7 +17,8 @@ In scope — attacks the app is built to survive:
 | A web page you have open using **DNS rebinding** to reach the app from inside your browser | `Host` header allow-list; rebinding must present the attacker's own hostname |
 | A web page making a cross-site request that changes state (CSRF) | Mutating requests require a **custom header**, which needs a CORS preflight this app never answers. No CORS headers are sent, deliberately |
 | Another local user reading your chats, uploads or endpoints off disk | `chat.db` is 0600, `models/uploads/` is 0700, uploads are 0600 |
-| A tampered or truncated model download | SHA256 verified against the manifest for direct downloads; commit hash + per-file ETag for HF snapshots |
+| A tampered or truncated model download | SHA256 verified against the manifest for direct downloads; for HF snapshots, a commit SHA pinned in the manifest plus per-file ETag |
+| Weights changing under you between installs | Every `hf_repo` entry pins a `revision`. `main` moves and can be force-pushed; a pinned commit means two installs weeks apart fetch identical bytes, and the commit is recorded in `models/installed.json` |
 | A hostile value in an environment variable or a path becoming a shell command | No `eval`, no `os.system`, no `shell=True`; every subprocess takes an argv list |
 
 Out of scope — say so plainly rather than implying cover:
@@ -125,8 +126,22 @@ the manifest. Provide a **read-scope** Hugging Face token via `--token` or
 `$HF_TOKEN`; never commit it. `huggingface-cli login` stores it in
 `~/.cache/huggingface` with user-only permissions.
 
-## Reporting a problem
+## Reporting a vulnerability
 
-Open an issue with reproduction steps. If the issue is exploitable and you
-would rather not post it publicly, say so in the issue without the details and
-ask for a private channel first.
+**Use [private vulnerability reporting](https://github.com/billalaashraf/Croft/security/advisories/new).**
+It opens a draft advisory only you and the maintainers can see, so nothing is
+disclosed before there is a fix.
+
+Please do not open a public issue for anything exploitable — including an issue
+that says "I found something, contact me". That still announces a vulnerability
+exists and points people at the right place to look.
+
+What helps: the version or commit, the platform, and the smallest reproduction
+you have. If you are not sure whether something counts, report it privately
+anyway; a false alarm costs far less than the alternative.
+
+Expect an acknowledgement within a week. This is a small project with no
+security team and no bounty — the honest commitment is that reports are read
+and acted on, not that they are triaged within hours.
+
+For non-security bugs, [open an issue](https://github.com/billalaashraf/Croft/issues/new/choose).

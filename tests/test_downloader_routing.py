@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Bilal Ashraf
 """
 Which download path a model takes, and what it carries.
 
@@ -155,3 +157,57 @@ def test_an_unknown_model_id_fails_without_downloading(pull):
     rc, http, hf = pull("no-such-model")
     assert rc == 2
     assert http.calls == [] and hf.calls == []
+
+
+# ---------------------------------------------------------------------------
+# Reproducibility: pinned revisions
+# ---------------------------------------------------------------------------
+# `main` is a moving target and can be force-pushed. Without a pinned commit,
+# two people installing the same model id weeks apart can get different weights
+# and neither has any way to notice.
+def test_every_snapshot_entry_pins_a_revision():
+    for entry in json.load(open(MANIFEST, encoding="utf-8"))["models"]:
+        if entry.get("download_url"):
+            continue                       # pinned by integrity_sha256 instead
+        rev = entry.get("revision")
+        assert rev, f"{entry['id']}: hf_repo entry with no pinned revision"
+        assert len(rev) == 40, f"{entry['id']}: {rev!r} is not a full commit SHA"
+        assert all(c in "0123456789abcdef" for c in rev.lower()), \
+            f"{entry['id']}: revision is not hexadecimal"
+
+
+def test_the_pinned_revision_is_what_gets_downloaded(pull):
+    """A revision in the manifest that never reaches snapshot_download would be
+    documentation, not a pin — which is exactly what integrity_sha256 was."""
+    rc, http, hf = pull("sdxl-turbo")
+
+    assert rc == 0
+    assert http.calls == [], "a snapshot model must not take the direct-URL path"
+    assert len(hf.calls) == 1
+    _args, kwargs = hf.calls[0]
+    assert kwargs["revision"] == manifest_entry("sdxl-turbo")["revision"]
+
+
+def test_a_pull_records_the_revision_it_installed(pull, tmp_path):
+    rc, _http, _hf = pull("sdxl-turbo")
+    assert rc == 0
+    state = json.load(open(tmp_path / "installed.json", encoding="utf-8"))
+    assert state["models"]["sdxl-turbo"]["revision"] == \
+        manifest_entry("sdxl-turbo")["revision"]
+
+
+# ---------------------------------------------------------------------------
+# The docs and the manifest have to agree
+# ---------------------------------------------------------------------------
+def test_every_model_id_named_in_the_readme_exists():
+    """`--model sdxl-turbo` sat in the README for a whole release while the
+    manifest had no such entry, so every documented Images example failed."""
+    import re
+    ids = {e["id"] for e in json.load(open(MANIFEST, encoding="utf-8"))["models"]}
+    readme = open(os.path.join(ROOT, "README.md"), encoding="utf-8").read()
+    # `--model <id>` only. The trailing lookahead skips the examples that pass a
+    # path or a repo id (`--model models/qwen2.5-7b-q4/*.gguf`), which are not
+    # manifest ids and are not meant to be.
+    cited = set(re.findall(r"--model\s+([a-z0-9][a-z0-9.\-]*)(?![\w/])", readme))
+    unknown = {c for c in cited if c not in ids and not c.startswith("<")}
+    assert not unknown, f"README names models that are not in the manifest: {sorted(unknown)}"

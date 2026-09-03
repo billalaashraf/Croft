@@ -1,0 +1,64 @@
+name: Add a model to the manifest
+description: Propose a model for models_manifest.json
+labels: ["model-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Croft ships pointers, never weights. A model can be added if it has a
+        public repository, a licence users can actually accept, and a pinnable
+        commit.
+
+  - type: input
+    id: repo
+    attributes:
+      label: Hugging Face repo
+      placeholder: stabilityai/sdxl-turbo
+    validations:
+      required: true
+
+  - type: input
+    id: revision
+    attributes:
+      label: Commit SHA to pin
+      description: |
+        Required — `main` moves. Get it with:
+        `curl -s https://huggingface.co/api/models/<owner>/<repo> | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])'`
+      placeholder: "71153311d3dbb46851df1931d3ca6e939de83304"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options: [text, image, video]
+    validations:
+      required: true
+
+  - type: input
+    id: license
+    attributes:
+      label: Licence
+      description: Note if it is non-commercial or requires accepting terms on Hugging Face.
+      placeholder: Apache-2.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why this one
+      description: What it does that the eleven already in the manifest do not.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: The licence permits redistribution of a *pointer* to these weights (Croft never bundles them).
+          required: true
+        - label: I have noted the approximate on-disk size and the VRAM it needs.
+          required: true

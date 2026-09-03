@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/billalaashraf/Croft/security/advisories/new
+    about: Report privately. Please do not open a public issue for anything exploitable.
+  - name: Model licence question
+    url: https://github.com/billalaashraf/Croft/blob/main/docs/SECURITY.md#licensing
+    about: Croft ships no weights. Each model's licence is yours to accept — start here.

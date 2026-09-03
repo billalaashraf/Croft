@@ -3,11 +3,11 @@
 # Use this when you want vLLM's paged-attention memory efficiency instead of the
 # prebuilt TGI image. Exposes an OpenAI-compatible API on :8000.
 #
-#   docker build -f docker/Dockerfile.text -t local-llm/text:vllm .
+#   docker build -f docker/Dockerfile.text -t croft/text:vllm .
 #   docker run --gpus all -p 8000:8000 -v $PWD/models:/models \
-#       -e MODEL=/models/qwen2.5-7b-q4 local-llm/text:vllm
+#       -e MODEL=/models/qwen2.5-7b-q4 croft/text:vllm
 
-FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04
+FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04@sha256:af8bd179ed3bf69d4b63b19a763662a6141f0f62ef099283f68d0b14b4bab0e3
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \

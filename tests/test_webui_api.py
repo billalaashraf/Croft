@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Bilal Ashraf
 """
 Web app access control and data hygiene.
 
@@ -208,3 +210,27 @@ def test_video_source_image_outside_uploads_is_refused(client):
                     json={"model_id": "svd-xt", "source_image_id": row["id"]})
     assert r.status_code == 400
     assert r.json()["error"] == "invalid source image"
+
+
+# ---------------------------------------------------------------------------
+# Liveness
+# ---------------------------------------------------------------------------
+def test_healthz_needs_no_token(client):
+    """A container healthcheck cannot hold a secret. /healthz is outside /api
+    for that reason, and the compose healthchecks depend on it staying there."""
+    r = client.get("/healthz")
+    assert r.status_code == 200
+    assert r.json()["status"] == "ok"
+
+
+def test_healthz_leaks_nothing(client):
+    """Unauthenticated means it must stay boring: a version string, no hardware
+    report, no model list, no filesystem paths."""
+    body = client.get("/healthz").json()
+    assert set(body) == {"status", "version"}
+
+
+def test_healthz_still_obeys_the_host_allow_list(client):
+    """Being tokenless does not make it a hole in the rebinding defence."""
+    r = client.get("/healthz", headers={"Host": "evil.example"})
+    assert r.status_code == 421

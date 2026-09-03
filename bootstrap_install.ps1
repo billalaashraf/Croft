@@ -1,5 +1,5 @@
 <#
-    bootstrap_install.ps1 — Windows / WSL2 bootstrap for Local LLM Chat.
+    bootstrap_install.ps1 — Windows / WSL2 bootstrap for Croft.
 
     Windows support for this project means WSL2, deliberately. The inference
     stacks it installs (vLLM, TGI, the CUDA and Metal builds of llama.cpp) have

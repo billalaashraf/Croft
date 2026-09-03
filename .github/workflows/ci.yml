@@ -23,8 +23,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # 3.10 is the floor the README promises; 3.14 is what requirements.lock
+        # was resolved on and what a Homebrew `python3` currently is. Testing
+        # only 3.10-3.12 left the interpreter most users actually have as the
+        # one interpreter nobody exercised.
         os: [ubuntu-latest, macos-latest]
-        python: ["3.10", "3.12"]
+        python: ["3.10", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
 
@@ -84,10 +88,43 @@ jobs:
       - name: Byte-compile every module
         run: python -m compileall -q installer webui tests
 
+      - name: Packaging metadata is valid
+        # A broken pyproject only shows up at release time otherwise, which is
+        # the worst moment to find out.
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          twine check dist/*
+
       - name: Manifest is valid JSON and fully specified
         run: |
           pip install -r requirements.txt pytest httpx
           pytest -q tests/test_manifest.py tests/test_downloader_routing.py
+
+  engines-resolve:
+    name: engine deps resolve (no download)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # The cheap half of the engine check, on every PR. `transformers` 5.x
+      # requires huggingface_hub>=1.5, which collides with the deliberate <1.0
+      # pin in requirements.txt — pip resolves it, downgrades the hub to satisfy
+      # the lock, and leaves transformers unimportable on an install that
+      # reported success. --dry-run catches exactly that in seconds, without
+      # downloading a gigabyte of wheels.
+      - name: Engine pins resolve against the core requirements
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install --dry-run --report /dev/null \
+            torch diffusers 'transformers>=4.46,<5' accelerate safetensors \
+            pillow imageio imageio-ffmpeg
+          pip check
 
   lockfile:
     name: requirements.lock installs
@@ -108,3 +145,4 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.lock
           python -c "import fastapi, huggingface_hub, requests, rich; print('ok')"
+          pip check

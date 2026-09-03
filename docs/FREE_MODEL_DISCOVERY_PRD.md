@@ -1,12 +1,22 @@
 # PRD: Free Model Discovery and Arena-Inspired Routing
 
-Status: Draft for implementation
-Owner: Local LLM Chat
+> **⚠ This is a proposal. None of it is implemented.**
+>
+> Nothing described in this document exists in Croft today. It is kept in the
+> repository as a design record, not as documentation — do not read it as a
+> description of how Croft works, and do not file bugs against it. For what
+> Croft actually does, see the [README](../README.md).
+>
+> The shipped model catalog is the static `models_manifest.json`, documented
+> under [Adding custom models](../README.md#adding-custom-models).
+
+Status: Proposal — not implemented, not scheduled
+Owner: Croft
 Last updated: 2026-08-04
 
 ## 1. Summary
 
-Local LLM Chat already has a static model manifest, hardware detection,
+Croft already has a static model manifest, hardware detection,
 recommendations, resumable Hugging Face downloads, local inference through GGUF,
 and OpenAI-compatible endpoint support. The next product step is a dynamic model
 catalog that can discover freely available online models, normalize their

@@ -1,0 +1,159 @@
+name: Nightly
+
+# The slow, network-heavy checks. These are the ones that catch the failures
+# users actually hit on a fresh machine, and they are too expensive to run on
+# every pull request:
+#
+#   * engines   — installs the real torch/diffusers stack (gigabytes of wheels)
+#   * checksums — verifies the manifest's hashes against the live files
+#   * upstream  — notices when a pinned model revision no longer exists
+#
+# A failure here is not a broken commit; it usually means the world moved. Read
+# it as a notification, not a regression.
+
+on:
+  schedule:
+    - cron: "17 4 * * *"        # 04:17 UTC daily, off the hour to dodge the rush
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  engines:
+    name: engines install and import (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # This is the job whose absence let a real bug reach a working machine:
+      # the per-PR smoke test sets LLM_NO_ENGINES=1, so nothing ever installed
+      # the engines and nothing ever imported them. `transformers` 5.x silently
+      # violated the huggingface_hub<1.0 pin and left the image stack broken on
+      # an install that reported success.
+      - name: Install core + the CPU engine stack
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install torch diffusers 'transformers>=4.46,<5' accelerate \
+                      safetensors pillow imageio imageio-ffmpeg
+
+      - name: Nothing in the resolved set conflicts
+        run: pip check
+
+      - name: The engines actually import
+        run: |
+          python - <<'PY'
+          import huggingface_hub, torch, diffusers, transformers
+          print("huggingface_hub", huggingface_hub.__version__)
+          print("transformers   ", transformers.__version__)
+          print("diffusers      ", diffusers.__version__)
+          print("torch          ", torch.__version__)
+
+          # The specific breakage this job exists to catch: transformers 5.x
+          # needs huggingface_hub>=1.5, requirements.txt pins <1.0, and the
+          # loser is transformers — which fails at import, not at install.
+          major = int(huggingface_hub.__version__.split(".")[0])
+          assert major == 0, f"huggingface_hub {huggingface_hub.__version__} breaks the <1.0 pin"
+          assert transformers.__version__.startswith("4."), \
+              f"transformers {transformers.__version__} requires hub >=1.5"
+          PY
+
+      - name: The web app imports with the engines present
+        run: |
+          pip install fastapi 'uvicorn[standard]' httpx pytest python-multipart
+          python -c "from webui import app; print('webui ok')"
+          pytest -q
+
+  checksums:
+    name: manifest checksums match upstream
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The unit tests assert the shipped hash is a well-formed SHA256 and that
+      # every direct-URL entry has one. Neither says the value is *correct* — a
+      # wrong digest fails verification for every new user while the suite stays
+      # green. This downloads the real files and settles it.
+      - name: Download each direct-URL model and verify its hash
+        run: |
+          python - <<'PY'
+          import hashlib, json, sys, urllib.request
+
+          failures = []
+          for e in json.load(open("models_manifest.json"))["models"]:
+              url, want = e.get("download_url"), e.get("integrity_sha256")
+              if not url:
+                  continue
+              print(f"→ {e['id']}: {url}", flush=True)
+              h = hashlib.sha256()
+              with urllib.request.urlopen(url, timeout=600) as r:
+                  while chunk := r.read(1 << 20):
+                      h.update(chunk)
+              got = h.hexdigest()
+              if got != want:
+                  failures.append(f"{e['id']}: manifest {want}, upstream {got}")
+                  print(f"  MISMATCH {got}")
+              else:
+                  print("  ok")
+
+          if failures:
+              print("\nThe manifest no longer matches upstream:")
+              print("\n".join("  " + f for f in failures))
+              sys.exit(1)
+          PY
+
+  revisions:
+    name: pinned revisions still exist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # A pin is only useful while it resolves. A repo that is deleted, renamed
+      # or made private turns every install of that model into a 404, and there
+      # is no way to notice from inside the codebase.
+      - name: Every pinned commit resolves on Hugging Face
+        run: |
+          python - <<'PY'
+          import json, sys, urllib.error, urllib.request
+
+          failures = []
+          for e in json.load(open("models_manifest.json"))["models"]:
+              repo, rev = e.get("hf_repo"), e.get("revision")
+              if not repo or e.get("download_url"):
+                  continue
+              url = f"https://huggingface.co/api/models/{repo}/revision/{rev}"
+              try:
+                  with urllib.request.urlopen(url, timeout=60) as r:
+                      json.load(r)
+                  print(f"ok   {e['id']:24} {repo}@{rev[:12]}")
+              except urllib.error.HTTPError as exc:
+                  # 401/403 is a gated repo answering "prove who you are", which
+                  # means the revision is there. Only 404 says it is gone.
+                  if exc.code in (401, 403):
+                      print(f"ok   {e['id']:24} {repo}@{rev[:12]} (gated)")
+                  else:
+                      failures.append(f"{e['id']}: {repo}@{rev} → HTTP {exc.code}")
+                      print(f"FAIL {e['id']:24} {repo}@{rev[:12]} HTTP {exc.code}")
+              except Exception as exc:
+                  failures.append(f"{e['id']}: {repo}@{rev} → {exc}")
+                  print(f"FAIL {e['id']:24} {exc}")
+
+          if failures:
+              print("\nPinned revisions that no longer resolve:")
+              print("\n".join("  " + f for f in failures))
+              sys.exit(1)
+          PY

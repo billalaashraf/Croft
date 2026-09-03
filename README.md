@@ -1,4 +1,8 @@
-# Local LLM Chat — automated installer & manager
+# Croft — automated installer & manager
+
+[![CI](https://github.com/billalaashraf/Croft/actions/workflows/ci.yml/badge.svg)](https://github.com/billalaashraf/Croft/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10--3.14-blue.svg)](pyproject.toml)
 
 A cross-platform, automated installer and management system for a **locally
 hosted** chat server with **text, image, and video** generation. It probes your
@@ -18,44 +22,21 @@ install can be continued where it left off.
 
 ## Project layout
 
-```
-local-llm-chat/
-├── bootstrap_install.sh          # Guided install: prereqs, venv+deps, model picker, resume, web UI
-├── bootstrap_install.ps1         # Windows → WSL2 bootstrap stub
-├── webui.sh                      # start / stop / restart / status / logs for the web app
-├── requirements.txt              # Python deps (core + optional extras)
-├── models_manifest.json          # Model catalog + schema (drives recommend/download/verify)
-├── installer/
-│   ├── __init__.py
-│   ├── main.py                   # CLI orchestrator: detect/recommend/install/pull/quantize/serve/status/uninstall
-│   ├── hardware.py               # Cross-platform capability probe → JSON
-│   ├── recommend.py              # param→VRAM formula + tiered rules + ranking
-│   ├── downloader.py             # Resumable HTTP + HF snapshot, SHA256 verify
-│   ├── quantize.py               # llama.cpp GGUF, AutoGPTQ, bitsandbytes hooks
-│   └── runtime.py                # docker / venv / systemd orchestration
-├── docker/
-│   ├── docker-compose.yml        # text (TGI/llama.cpp/webui), SD, manager; GPU exposed
-│   ├── Dockerfile.text           # vLLM CUDA server
-│   ├── Dockerfile.sd             # diffusers image/video server
-│   └── Dockerfile.manager        # FastAPI status panel
-├── services/
-│   ├── local-llm-text.service    # systemd unit (server mode)
-│   └── local-llm-manager.service # systemd unit (web panel)
-├── webui/
-│   ├── app.py                    # FastAPI chat app + status panel (:8090)
-│   ├── chatstore.py              # SQLite persistence: conversations, messages, settings
-│   ├── inference.py              # chat inference: embedded GGUF + OpenAI-compatible proxy
-│   ├── imagegen.py               # text-to-image: diffusers pipeline (sdxl-turbo, etc.)
-│   ├── videogen.py               # text/image-to-video: AnimateDiff + Stable Video Diffusion
-│   ├── files.py                  # attachment text extraction (text/code/PDF/docx)
-│   ├── static/index.html         # chat + image frontend (self-contained SPA, no build step)
-│   └── sd_server.py              # minimal diffusers txt2img / txt2vid API
-├── tests/
-│   ├── test_hardware.py          # detection + recommendation formula
-│   └── test_manifest.py          # manifest schema + downloader integrity
-└── docs/
-    └── COMPATIBILITY.md          # formula, worked examples, tier tables
-```
+Directory-level on purpose. A file-by-file map in a README is guaranteed to
+drift — this one used to list two of the six test files.
+
+| Path | What lives here |
+|------|-----------------|
+| `bootstrap_install.sh` | The guided install: prereqs, venv + deps, model picker, resume, engines, web UI |
+| `bootstrap_install.ps1` | Windows → WSL2 bootstrap stub |
+| `webui.sh` | start / stop / restart / status / logs for the web app |
+| `models_manifest.json` | Model catalog + schema. Drives recommendation, download, revision pinning and integrity |
+| `installer/` | The CLI: hardware probe, VRAM formula and ranking, resumable downloader, quantisation, docker/venv/systemd orchestration |
+| `webui/` | The FastAPI app — chat, images, video, the manager panel, SQLite history, and the self-contained SPA in `static/` |
+| `docker/` | Compose stack and Dockerfiles for the text, SD and manager services |
+| `services/` | systemd units and a launchd agent for running Croft as a service |
+| `tests/` | pytest suite plus `test_bootstrap.sh` for the shell paths pytest cannot reach |
+| `docs/` | [COMPATIBILITY.md](docs/COMPATIBILITY.md) (the formula and tier tables) and [SECURITY.md](docs/SECURITY.md) (the threat model) |
 
 ## Installation
 
@@ -75,8 +56,8 @@ local-llm-chat/
 ### Step 0 — get the code
 
 ```bash
-git clone <this-repo-url> local-llm-chat && cd local-llm-chat
-# …or download and extract the archive, then: cd local-llm-chat
+git clone https://github.com/billalaashraf/Croft.git croft && cd croft
+# …or download and extract the archive, then: cd croft
 ```
 
 ### Option A — one guided command (recommended)
@@ -158,7 +139,7 @@ WSL2. In order it:
 
 1. **Detects** your OS, architecture, and accelerator (CUDA / ROCm / Apple MPS / CPU).
 2. **Locates itself.** Run from inside a checkout (the installer sits beside it)
-   and it installs *in place*; otherwise it falls back to `$HOME/local-llm-chat`
+   and it installs *in place*; otherwise it falls back to `$HOME/croft`
    and fetches the package (tarball via `LLM_PKG_URL`, else `git clone`).
 3. **Ensures prerequisites** — Python in both modes, plus Docker for docker mode.
    GPU drivers are advised, never auto-installed.
@@ -363,8 +344,9 @@ python3 -m installer.main serve --backend llama.cpp \
 ```
 
 Chat-app environment: `LLM_CHAT_DB` (history DB, default `<models>/chat.db`),
-`LLM_CHAT_GGUF` (force a specific GGUF file), `LLM_CHAT_CTX` (context window,
-default 4096), `LLM_CHAT_API_KEY` (endpoint auth).
+`LLM_CHAT_API_KEY` (endpoint auth), `LLM_OLLAMA_HOST` (default
+`http://127.0.0.1:11434`). Every variable Croft reads is listed with its default
+in [.env.example](.env.example).
 
 ### Images (text-to-image)
 
@@ -423,9 +405,26 @@ frame-by-frame variant.
 ## Adding custom models
 
 Append an entry to `models_manifest.json` following the `schema` block at the
-top of that file. Set `gated: true` and a real `integrity_sha256` for
-single-file downloads. The new id is immediately usable:
-`python3 -m installer.main pull --model <your-id>`.
+top of that file. Two fields are what make an entry trustworthy, and the test
+suite enforces both:
+
+- **`integrity_sha256`** — required for any entry with a `download_url`. A
+  direct download with no hash is an unverifiable download.
+- **`revision`** — required for any entry with an `hf_repo`. Pin the commit SHA,
+  not `main`: branches move and can be force-pushed, so an unpinned entry means
+  two people installing the same id weeks apart can get different weights with
+  no way to notice. Get it with:
+
+  ```bash
+  curl -s https://huggingface.co/api/models/<owner>/<repo> | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])'
+  ```
+
+Set `gated: true` if the repo requires accepting a licence on Hugging Face. The
+new id is immediately usable: `python3 -m installer.main pull --model <your-id>`.
+
+If the file fails to parse, Croft warns on stderr and falls back to the built-in
+catalog — so a typo shows up as a warning rather than a model that silently
+never appears.
 
 ## Design decisions & limitations
 
@@ -450,22 +449,45 @@ single-file downloads. The new id is immediately usable:
 python3 -m installer.main uninstall --model mistral-7b-q4   # removes weights (prompts)
 kill $(cat .webui.pid)                                      # stop the native web panel
 docker compose -f docker/docker-compose.yml down            # stop containers
-systemctl --user disable --now local-llm-text               # remove service
+systemctl --user disable --now croft-text                   # remove service
 ```
 
 ## Testing
 
 ```bash
-pip install pytest
+pip install -e '.[dev]'      # or: pip install pytest httpx
 pytest -q
 ```
 
-CI runs the same suite plus `shellcheck` on Ubuntu and macOS — see
-`.github/workflows/ci.yml`.
+CI runs the same suite on Python 3.10–3.14 across Ubuntu and macOS, plus
+`shellcheck`, a lockfile install, and a nightly job that installs the real
+inference engines and asserts they import — see `.github/workflows/ci.yml`.
 
-See [docs/SECURITY.md](docs/SECURITY.md) for the threat model (what the app
-defends against, what it explicitly does not, and what changes if you bind it
-to anything other than loopback) and [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
-for hardware notes. Licensing: you are responsible for accepting each model's
-license before download; the installer enforces an explicit acceptance step for
-`gated` models.
+## Contributing
+
+Bug reports and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md)
+covers the dev setup, what CI will check, and the conventions this codebase
+follows. Participation is governed by the
+[Code of Conduct](CODE_OF_CONDUCT.md).
+
+Found a security problem? **Don't open a public issue** — use
+[GitHub's private vulnerability reporting](https://github.com/billalaashraf/Croft/security/advisories/new).
+See [docs/SECURITY.md](docs/SECURITY.md).
+
+## License
+
+Croft is licensed under the [Apache License 2.0](LICENSE).
+
+**This does not cover model weights.** Croft bundles none — it downloads them
+from their original repositories, and each carries its own licence. Some are
+non-commercial (Stable Video Diffusion, SDXL-Turbo); some are gated and require
+you to accept terms on Hugging Face before any bytes move, which the installer
+enforces as an explicit step. Every model's licence is recorded in
+[models_manifest.json](models_manifest.json) and, once installed, in
+`models/installed.json` alongside the exact commit it came from. Accepting them
+is your responsibility.
+
+See [docs/SECURITY.md](docs/SECURITY.md) for the threat model — what the app
+defends against, what it explicitly does not, and what changes if you bind it to
+anything other than loopback — and [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
+for hardware notes.
