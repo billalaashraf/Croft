@@ -42,6 +42,37 @@ gpumem.register("image", _PIPES.clear)
 
 
 # ---------------------------------------------------------------------------
+# Parameter bounds
+#
+# Shared by the image and video paths. Both are reachable over HTTP, so a
+# generation parameter is untrusted input that gets turned directly into an
+# allocation and a GPU occupancy. ValueError rather than a clamp: silently
+# generating something other than what was asked for is its own bug, and the
+# caller can act on the message.
+# ---------------------------------------------------------------------------
+def _bounded(value, lo: int, hi: int, name: str, *, multiple_of: int = 1) -> int:
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be a whole number") from None
+    if not lo <= v <= hi:
+        raise ValueError(f"{name} must be between {lo} and {hi} (got {v})")
+    if multiple_of > 1 and v % multiple_of:
+        raise ValueError(f"{name} must be a multiple of {multiple_of} (got {v})")
+    return v
+
+
+def _bounded_f(value, lo: float, hi: float, name: str) -> float:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be a number") from None
+    if not lo <= v <= hi:
+        raise ValueError(f"{name} must be between {lo} and {hi} (got {v})")
+    return v
+
+
+# ---------------------------------------------------------------------------
 # Availability + registry
 # ---------------------------------------------------------------------------
 def _deps_local() -> bool:
@@ -227,10 +258,19 @@ def _generate_local(model_id: str, prompt: str, *, negative_prompt: Optional[str
         raise RuntimeError(f"'{model_id}' is not an installed image model")
 
     d = default_params(model_id)
-    steps = int(steps or d["steps"])
-    width = int(width or d["width"])
-    height = int(height or d["height"])
-    guidance = float(guidance if guidance is not None else d["guidance"])
+    # Coerced *and* bounded. int() alone rejects nonsense but not scale, and
+    # these values are multiplied into an allocation: {"width": 100000} is a
+    # syntactically valid request that exhausts memory, and {"steps": 100000}
+    # occupies the only accelerator on the machine indefinitely.
+    steps = _bounded(steps or d["steps"], 1, 150, "steps")
+    width = _bounded(width or d["width"], 64, 2048, "width", multiple_of=8)
+    height = _bounded(height or d["height"], 64, 2048, "height", multiple_of=8)
+    guidance = _bounded_f(guidance if guidance is not None else d["guidance"],
+                          0.0, 50.0, "guidance")
+    # Coerced here rather than deep inside the run, so the value recorded in
+    # the params column is always a number — that column is rendered into the
+    # gallery, and a string reaching it would be attacker-controlled markup.
+    seed = None if seed is None else _bounded(seed, 0, 2**32 - 1, "seed")
 
     import numpy as np
     import torch

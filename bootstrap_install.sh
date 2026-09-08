@@ -40,6 +40,18 @@ else
   INSTALL_DIR="$HOME/croft"
 fi
 
+# Private scratch space for anything downloaded before it is trusted.
+#
+# These used to be fixed paths in /tmp. On a shared machine that is a
+# world-writable directory: another user can pre-create or replace
+# /tmp/get-docker.sh in the window between the download and `sudo sh`, and the
+# confirmation prompt in that window makes the race comfortable to win rather
+# than hard. mktemp -d gives a fresh 0700 directory nobody else can enter.
+SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/croft-bootstrap.XXXXXXXX")"
+chmod 700 "$SCRATCH"
+cleanup_scratch() { rm -rf "$SCRATCH"; }
+trap cleanup_scratch EXIT INT TERM
+
 log()  { printf '\033[1;34m[bootstrap]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*" >&2; }
 err()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; }
@@ -221,14 +233,24 @@ ensure_docker() {
         # chance to look first. Same source, same TLS, but downloaded to a file
         # you can read before it runs.
         if confirm "Download Docker's official install script and run it (needs sudo)?"; then
-          run curl -fsSL --proto '=https' --tlsv1.2 -o /tmp/get-docker.sh https://get.docker.com
-          log "Saved to /tmp/get-docker.sh — inspect it if you like; it runs as root."
+          run curl -fsSL --proto '=https' --tlsv1.2 \
+                   -o "$SCRATCH/get-docker.sh" https://get.docker.com
+          log "Saved to $SCRATCH/get-docker.sh — inspect it if you like; it runs as root."
           if [ "$ASSUME_YES" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
-            confirm "Run /tmp/get-docker.sh now?" || { err "Aborted."; exit 1; }
+            confirm "Run it now?" || { err "Aborted."; exit 1; }
           fi
-          run sudo sh /tmp/get-docker.sh
-          run sudo usermod -aG docker "$USER" || warn "Could not add $USER to the docker group."
-          warn "Log out/in (or 'newgrp docker') for group changes to take effect."
+          run sudo sh "$SCRATCH/get-docker.sh"
+          # Membership of the docker group is root-equivalent: anyone in it can
+          # start a privileged container that mounts the host filesystem. Say so
+          # rather than presenting it as a convenience step.
+          warn "Adding $USER to the 'docker' group grants root-equivalent access"
+          warn "to this machine (a container can mount the host filesystem)."
+          if confirm "Add $USER to the docker group?"; then
+            run sudo usermod -aG docker "$USER" || warn "Could not add $USER to the docker group."
+            warn "Log out/in (or 'newgrp docker') for group changes to take effect."
+          else
+            log "Skipped. Run docker with sudo, or add the group yourself later."
+          fi
         else
           err "Docker required for docker mode. Re-run with --mode native to skip."
           exit 1
@@ -286,15 +308,29 @@ fetch_package() {
   mkdir -p "$INSTALL_DIR"
   if [ -n "$PKG_URL" ]; then
     log "Downloading installer package: $PKG_URL"
-    run curl -fL --retry 5 -C - -o /tmp/croft.tar.gz "$PKG_URL"
-    if [ -n "$PKG_SHA256" ] && [ "$DRY_RUN" -eq 0 ]; then
-      sha256_check "$PKG_SHA256" /tmp/croft.tar.gz \
+    # A checksum is required, not advised. This archive is extracted and its
+    # installer/main.py is then executed, so an unverified download is remote
+    # code execution — and warning about it while proceeding anyway is the
+    # worst of both worlds. --proto '=https' matches the Docker fetch above:
+    # without it, an http:// package URL is a plaintext MITM into that same
+    # code path.
+    if [ -z "$PKG_SHA256" ] && [ "$DRY_RUN" -eq 0 ]; then
+      err "LLM_PKG_URL is set but LLM_PKG_SHA256 is not."
+      err "The archive is extracted and executed, so it must be verified."
+      err "Publish the checksum alongside the archive and set LLM_PKG_SHA256."
+      exit 1
+    fi
+    run curl -fL --proto '=https' --tlsv1.2 --retry 5 -C - \
+             -o "$SCRATCH/croft.tar.gz" "$PKG_URL"
+    if [ "$DRY_RUN" -eq 0 ]; then
+      sha256_check "$PKG_SHA256" "$SCRATCH/croft.tar.gz" \
         || { err "Checksum verification FAILED — aborting."; exit 1; }
       log "Checksum verified."
-    else
-      warn "No PKG_SHA256 provided — skipping integrity check (not recommended)."
     fi
-    run tar -xzf /tmp/croft.tar.gz -C "$INSTALL_DIR" --strip-components=1
+    # --no-same-owner / --no-same-permissions: a tarball must not choose the
+    # ownership or the mode of what it unpacks into your home directory.
+    run tar -xzf "$SCRATCH/croft.tar.gz" -C "$INSTALL_DIR" \
+            --strip-components=1 --no-same-owner --no-same-permissions
   else
     log "No package URL set; cloning repo: $REPO_URL"
     run git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
@@ -323,7 +359,7 @@ ensure_venv_deps() {
     log "[dry-run] would set up venv + install dependencies:"
     echo "[dry-run] python3 -m venv \"$VENV_DIR\""
     echo "[dry-run] \"$VENV_PY\" -m pip install --upgrade pip"
-    echo "[dry-run] \"$VENV_PY\" -m pip install -r \"$req\""
+    echo "[dry-run] \"$VENV_PY\" -m pip install --require-hashes -r \"$req\""
     return 0
   fi
 
@@ -347,14 +383,23 @@ ensure_venv_deps() {
 
   log "Installing core dependencies (huggingface_hub, requests, rich, uvicorn ...)"
   venv_pip install --upgrade pip >/dev/null 2>&1 || warn "pip self-upgrade skipped."
+
+  # The lock carries a hash for every artefact, so install it with
+  # --require-hashes: without that flag pip reads the hashes as decoration and
+  # accepts whatever the index serves for each pinned version. requirements.txt
+  # is a range, not a lock, and cannot be hash-checked.
+  hash_flag=()
+  [ "$req" = "$INSTALL_DIR/requirements.lock" ] && hash_flag=(--require-hashes)
+
   if [ -f "$req" ]; then
-    if ! venv_pip install -r "$req"; then
+    if ! venv_pip install "${hash_flag[@]+"${hash_flag[@]}"}" -r "$req"; then
       # A lock resolved on another OS/Python can legitimately fail to install
       # here (a wheel that does not exist for this platform). That is a reason
       # to fall back, not to abandon the install.
       if [ "$req" != "$INSTALL_DIR/requirements.txt" ] && [ -f "$INSTALL_DIR/requirements.txt" ]; then
         warn "requirements.lock did not install on this platform — falling back to requirements.txt."
         req="$INSTALL_DIR/requirements.txt"
+        hash_flag=()          # a range file has nothing to verify against
         venv_pip install -r "$req" || {
           err "Dependency install failed. The machine may be offline or pip is blocked."
           err "Model download needs these packages — fix connectivity and re-run."

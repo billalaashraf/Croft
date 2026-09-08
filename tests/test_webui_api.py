@@ -106,8 +106,12 @@ def test_cookie_alone_cannot_write(client):
 
 
 def test_cookie_plus_header_can_write(client):
+    # A loopback endpoint, because settings values are validated now: this test
+    # is about the CSRF boundary, and a value the endpoint check would reject
+    # would fail it for an unrelated reason.
     client.cookies.set("llm_token", TOKEN)
-    r = client.post("/api/settings", json={"default_endpoint": "http://ok"},
+    r = client.post("/api/settings",
+                    json={"default_endpoint": "http://127.0.0.1:8080/v1"},
                     headers=auth_headers())
     assert r.status_code == 200
 
@@ -234,3 +238,92 @@ def test_healthz_still_obeys_the_host_allow_list(client):
     """Being tokenless does not make it a hole in the rebinding defence."""
     r = client.get("/healthz", headers={"Host": "evil.example"})
     assert r.status_code == 421
+
+
+# ---------------------------------------------------------------------------
+# Deny by default (the /manager hole)
+# ---------------------------------------------------------------------------
+# The gate used to be `path.startswith("/api/")`, so a route was protected only
+# if it happened to be mounted under that prefix — and /manager, which renders
+# the hardware report and the full model inventory, was not.
+def test_manager_panel_requires_a_token(client):
+    assert client.get("/manager").status_code == 401
+
+
+def test_manager_panel_opens_with_a_token(client):
+    assert client.get("/manager", headers=auth_headers()).status_code == 200
+
+
+def test_only_the_declared_paths_are_public(client):
+    """Every route the app exposes is either in PUBLIC_PATHS or authenticated.
+
+    Walking the router rather than listing paths by hand: a new unauthenticated
+    route should fail this the day it is added, which a fixed list cannot do.
+    """
+    import webui.app as appmod
+    for route in appmod.app.routes:
+        path = getattr(route, "path", "")
+        if not path or "{" in path or path.startswith("/static"):
+            continue
+        if path in appmod.PUBLIC_PATHS:
+            continue
+        if "GET" not in (getattr(route, "methods", None) or set()):
+            continue
+        assert client.get(path).status_code in (401, 421), \
+            f"{path} answered without a token and is not in PUBLIC_PATHS"
+
+
+# ---------------------------------------------------------------------------
+# Endpoint validation (SSRF + credential exfiltration)
+# ---------------------------------------------------------------------------
+# Whatever is stored here receives every future message *and* the bearer token
+# from LLM_CHAT_API_KEY, so an arbitrary value is a credential leak, not just
+# an outbound request.
+@pytest.mark.parametrize("bad", [
+    "http://169.254.169.254/latest/meta-data",   # cloud instance credentials
+    "http://10.0.0.5:8000/v1",                   # private range
+    "file:///etc/passwd",                        # not even http
+    "ftp://127.0.0.1/",                          # wrong scheme, right host
+])
+def test_non_loopback_endpoints_are_refused(client, bad):
+    r = client.post("/api/settings", json={"default_endpoint": bad},
+                    headers=auth_headers())
+    assert r.status_code == 400, f"{bad} was accepted"
+
+
+def test_loopback_endpoints_are_allowed(client):
+    for good in ("http://127.0.0.1:8080/v1", "http://localhost:11434/v1"):
+        r = client.post("/api/settings", json={"default_endpoint": good},
+                        headers=auth_headers())
+        assert r.status_code == 200, f"{good} was refused"
+
+
+def test_a_stored_bad_endpoint_is_still_refused_at_read_time(client, monkeypatch):
+    """Validation on write is not enough on its own: a row can predate the
+    check or be edited in the database directly."""
+    from webui import chatstore, inference
+    chatstore.set_setting("default_endpoint", "http://169.254.169.254/v1")
+    assert inference._endpoint_for("anything") is None
+
+
+# ---------------------------------------------------------------------------
+# Compose service allow-list
+# ---------------------------------------------------------------------------
+def test_unknown_compose_service_is_refused(client):
+    """`service` went straight into the docker compose argv, where a value
+    starting with `-` is read as a flag rather than a service name."""
+    r = client.post("/api/service/up/--build", headers=auth_headers())
+    assert r.status_code == 400
+    assert "unknown service" in r.json()["error"]
+
+
+# ---------------------------------------------------------------------------
+# Upload limits
+# ---------------------------------------------------------------------------
+def test_oversized_upload_is_refused(client, monkeypatch):
+    from webui import files
+    monkeypatch.setattr(files, "MAX_BYTES", 1024)
+    r = client.post("/api/attach",
+                    files={"file": ("big.txt", b"x" * 4096, "text/plain")},
+                    headers=auth_headers())
+    assert r.status_code == 413

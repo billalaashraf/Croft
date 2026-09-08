@@ -23,6 +23,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 cd "$SCRIPT_DIR"
 
+# Everything this script creates is for this user only. The log files in
+# particular: they carry prompts, model errors and — until the app stopped
+# printing it off a TTY — the access token, while being created by the shell
+# under the caller's umask, which is 0644 on a default install. That made a
+# mode-0600 token readable by every account on the machine.
+umask 077
+
 HOST="${LLM_WEBUI_HOST:-127.0.0.1}"
 PORT="${LLM_WEBUI_PORT:-8090}"
 # A wildcard bind is not an address anyone can open; show loopback instead.
@@ -244,6 +251,8 @@ CMD="${1:-}"; shift || true
 [ "${1:-}" = "--docker" ] && { MODE="docker"; shift || true; }
 
 case "$CMD" in
+  url)     if [ -r "$TOKEN_FILE" ]; then open_url
+           else err "no token yet at $TOKEN_FILE — start the app first"; exit 1; fi ;;
   start)   [ "$MODE" = docker ] && docker_start  || native_start ;;
   stop)    [ "$MODE" = docker ] && docker_stop   || native_stop ;;
   restart) if [ "$MODE" = docker ]; then docker_stop || true; docker_start;
@@ -252,5 +261,5 @@ case "$CMD" in
   logs)    if [ "$MODE" = docker ]; then $COMPOSE logs "${1:-}" manager;
            elif [ -f "$LOGFILE" ]; then [ "${1:-}" = "-f" ] && tail -f "$LOGFILE" || tail -n 60 "$LOGFILE";
            else warn "no log at $LOGFILE"; fi ;;
-  *) echo "usage: $0 {start|stop|restart|status|logs} [--docker]"; exit 2 ;;
+  *) echo "usage: $0 {start|stop|restart|status|logs|url} [--docker]"; exit 2 ;;
 esac

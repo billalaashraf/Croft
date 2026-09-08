@@ -35,12 +35,24 @@ CONNECT_TIMEOUT = 1.0
 READ_TIMEOUT = float(os.environ.get("LLM_SD_TIMEOUT", "3600"))
 
 
+def _auth_headers() -> dict:
+    """The worker now requires the same token the app does.
+
+    Both processes read it from the same file, so there is nothing to
+    distribute. A custom header rather than a cookie, because the worker refuses
+    cookies on mutating requests for the same CSRF reason the app does.
+    """
+    from webui import auth
+    return {"X-LLM-Token": auth.get_token()}
+
+
 def health() -> Optional[dict]:
     """The worker's {deps, device}, or None when there's no worker."""
     if requests is None:
         return None
     try:
-        r = requests.get(f"{SD_URL}/health", timeout=CONNECT_TIMEOUT)
+        r = requests.get(f"{SD_URL}/health", timeout=CONNECT_TIMEOUT,
+                         headers=_auth_headers())
         return r.json() if r.status_code == 200 else None
     except Exception:
         return None
@@ -55,6 +67,7 @@ def post(path: str, payload: dict) -> dict:
     if requests is None:
         raise RuntimeError("`requests` is required to reach the diffusion worker")
     r = requests.post(f"{SD_URL}{path}", json=payload,
+                      headers=_auth_headers(),
                       timeout=(CONNECT_TIMEOUT, READ_TIMEOUT))
     if r.status_code != 200:
         try:

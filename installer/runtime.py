@@ -59,15 +59,21 @@ def docker_available() -> bool:
 
 
 def nvidia_container_toolkit_ok() -> bool:
-    """Best-effort probe for GPU passthrough support."""
+    """Best-effort probe for GPU passthrough support.
+
+    Asks the daemon which runtimes it has registered rather than pulling and
+    executing a container to find out. The old probe ran
+    `docker run --rm --gpus all nvidia/cuda:...` — a mutable tag, fetched over
+    the network and executed, purely as a capability test. Every other image in
+    this project is pinned by digest; a detection routine had become the one
+    path that still ran whatever the registry served today.
+    """
     if not docker_available():
         return False
     try:
-        r = subprocess.run(
-            ["docker", "run", "--rm", "--gpus", "all",
-             "nvidia/cuda:12.4.0-base-ubuntu22.04", "nvidia-smi"],
-            capture_output=True, text=True, timeout=60)
-        return r.returncode == 0
+        r = subprocess.run(["docker", "info", "--format", "{{json .Runtimes}}"],
+                           capture_output=True, text=True, timeout=20)
+        return r.returncode == 0 and "nvidia" in (r.stdout or "").lower()
     except Exception:
         return False
 
@@ -130,6 +136,16 @@ def install_systemd_unit(name: str, exec_start: str, workdir: str, *,
     Write a systemd unit and enable it. `user_scope=True` installs to
     ~/.config/systemd/user (no root). System scope requires confirmation.
     """
+    # systemd parses a unit file line by line, so a newline in any interpolated
+    # value ends the directive it sits in and starts a new one — an
+    # `exec_start` containing "\nExecStartPre=/bin/sh -c ..." becomes a second
+    # command systemd will run. shlex.quote does not help here: it protects
+    # against a *shell*, and this file is never read by one.
+    for label, value in (("name", name), ("workdir", workdir),
+                         ("exec_start", exec_start)):
+        if "\n" in value or "\r" in value:
+            raise ValueError(f"{label} must not contain a newline "
+                             f"(it would inject a systemd directive)")
     unit = SYSTEMD_TEMPLATE.format(name=name, workdir=workdir, exec_start=exec_start)
     if user_scope:
         unit_dir = os.path.expanduser("~/.config/systemd/user")
@@ -144,10 +160,23 @@ def install_systemd_unit(name: str, exec_start: str, workdir: str, *,
     unit_path = os.path.join(unit_dir, f"croft-{name}.service")
     if dry_run:
         print(f"[dry-run] write unit -> {unit_path}\n{unit}")
-    else:
+    elif user_scope:
         os.makedirs(unit_dir, exist_ok=True)
         with open(unit_path, "w", encoding="utf-8") as fh:
             fh.write(unit)
+    else:
+        # /etc/systemd/system is root-owned, so a plain open() here failed with
+        # EACCES after the user had already granted sudo — the enable step then
+        # ran against a unit that was never written. Stage it as this user and
+        # let install(1) place it with an explicit mode.
+        import tempfile
+        fd, staged = tempfile.mkstemp(prefix="croft-unit.")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(unit)
+            _run(["sudo", "install", "-m", "0644", staged, unit_path], dry_run)
+        finally:
+            os.unlink(staged)
     _run(ctl + ["daemon-reload"], dry_run)
     _run(ctl + ["enable", "--now", f"croft-{name}.service"], dry_run)
     return unit_path

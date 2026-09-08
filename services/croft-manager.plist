@@ -7,6 +7,12 @@
   scope — it needs no root, and it stops when you log out.
 
   Install (replace USERNAME, or run the sed line):
+    # launchd will not create the parent directory for StandardOutPath or
+    # StandardErrorPath. If ~/croft/logs does not exist the agent fails to
+    # start, and because the failure is that it cannot open its own log, it
+    # leaves nothing behind explaining why. Create it first.
+    mkdir -p "$HOME/croft/logs"
+    mkdir -p "$HOME/Library/LaunchAgents"
     sed "s|/Users/USERNAME|$HOME|g" services/croft-manager.plist \
       > ~/Library/LaunchAgents/com.croft.manager.plist
     launchctl load ~/Library/LaunchAgents/com.croft.manager.plist

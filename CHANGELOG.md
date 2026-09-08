@@ -9,6 +9,76 @@ and the web app both read it from there.
 
 ## [Unreleased]
 
+### Security
+
+A pre-publication security audit produced 23 findings; all are fixed. The design
+was sound — no `eval`, argv everywhere, parameterised SQL, an escape-first
+markdown renderer — and every finding was an implementation gap against it.
+
+**If you have run a previous version, rotate your token**: `rm .webui_token` and
+restart. Assume the old one is compromised on any shared machine.
+
+- **The access token was written in clear text to a world-readable log.** The
+  app printed the unlock URL at startup, `webui.sh` redirected that into
+  `webui.log`, and the shell created it 0644 under the default umask — so the
+  mode-0600 token file was defeated by the log beside it, and any local account
+  could read the secret. The URL is now printed only to an interactive terminal
+  (`./webui.sh url` gets it otherwise), and `webui.sh` sets `umask 077`.
+- **`/manager` needed no token.** The gate was `path.startswith("/api/")`, so
+  the hardware report and model inventory were served to anyone who asked.
+  Authentication is now deny-by-default with `PUBLIC_PATHS` naming the two
+  exceptions, and a test walks the router to catch a new unauthenticated route.
+- **The diffusion worker on :7862 had no authentication and no Host
+  allow-list.** The app's anti-rebinding defence did not extend to the second
+  listener, so a web page could drive the accelerator and evict models. It now
+  enforces both gates from the same token file.
+- **An inference endpoint could be set to any address.** Croft POSTs the whole
+  conversation there and attaches `LLM_CHAT_API_KEY`, so one settings write
+  exfiltrated both. Endpoints must now resolve to loopback unless
+  `LLM_ALLOW_REMOTE_ENDPOINT=1`; link-local is refused regardless, redirects are
+  disabled, and stored values are re-validated on read.
+- **The bootstrap would execute unverified remote code.** `LLM_PKG_SHA256` was
+  optional and its absence only warned; the archive fetch lacked
+  `--proto '=https'`; and both downloads used fixed `/tmp` paths, letting a
+  local user swap `get-docker.sh` during the confirmation prompt for a root
+  shell. The checksum is now required, HTTPS enforced, downloads land in a
+  `mktemp -d` 0700 directory, and extraction uses `--no-same-owner`.
+- **Permission hardening only applied at file creation,** so installs predating
+  it kept `chat.db` at 0644 and `models/uploads/` at 0755 while SECURITY.md
+  stated 0600 and 0700 as facts. Both are now re-applied on every start.
+- Uploads are size-checked as they stream rather than after being buffered
+  whole; generation parameters are bounded, not merely coerced; the compose
+  service name is checked against a closed set before reaching the argv; video
+  pipelines load with `use_safetensors=True`; the AnimateDiff base is pinned to
+  a commit; `requirements.lock` now carries a hash per artefact and is installed
+  with `--require-hashes`; the GPU probe no longer pulls and runs an unpinned
+  container; raw exception text is logged rather than returned; attachment
+  downloads verify path containment; systemd units reject newline injection;
+  SQLite gained a busy timeout; and the SPA escapes apostrophes and every
+  remaining attribute interpolation.
+
+### Fixed
+
+- **The built-in catalog was still unpinned.** `models_manifest.json` pinned its
+  own entries, but five ids exist only in `recommend.DEFAULT_CATALOG`
+  (`qwen2.5-3b-q4`, `llama3.2-3b-q4`, `mistral-7b-gptq`, `qwen2.5-32b-gptq`,
+  `controlnet-sdxl`) and so still resolved `main`. All fifteen catalog entries
+  now carry a commit SHA in `DEFAULT_REVISIONS`, a manifest entry that omits
+  `revision` inherits the built-in pin rather than erasing it, and
+  `tests/test_recommend_catalog.py` fails if a new entry is added unpinned.
+- **The nightly revision check counted "cannot verify" as "verified".** Hugging
+  Face answers 401/403 for *any* revision of a gated repo, so a bad pin on a
+  gated model passed. Those are now reported as UNVERIFIED and fail the job;
+  the check sends an `HF_TOKEN` secret when one is configured, and covers the
+  built-in catalog's pins as well as the manifest's.
+- **`launchctl load` could fail with no explanation.** launchd does not create
+  the parent directory for `StandardOutPath`, so a missing `~/croft/logs` left
+  the agent unable to start *and* unable to log why. The install steps now
+  create it first.
+- **README described `systemctl disable --now` as removing a service.** It stops
+  and disables the unit but leaves the unit file installed; the full removal
+  steps are now documented.
+
 ## [0.1.0] — 2026-09-03
 
 First public release. Croft has been usable for a while; this is the version

@@ -488,7 +488,13 @@ async function unlock(){
 }
 
 const api = (u,o) => fetch(u,o).then(r=>r.json());
-const esc = s => (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// Escapes the apostrophe as well as the four obvious characters. Every
+// attribute this file writes is double-quoted, so `'` is not exploitable
+// today — but "safe because of how the call sites happen to be written" is a
+// property that a later edit silently removes, and one more entry costs
+// nothing.
+const esc = s => (s==null?'':String(s)).replace(/[&<>"']/g,
+  c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 function md(t){
   t = esc(t);
@@ -602,7 +608,7 @@ function renderThread(){
 function attHtml(atts){
   if(!atts || !atts.length) return '';
   return '<div class="atts">'+atts.map(a=>
-    `<a class="att" href="/api/attachment/${a.id}/file" target="_blank" rel="noopener">
+    `<a class="att" href="/api/attachment/${esc(a.id)}/file" target="_blank" rel="noopener">
       <svg viewBox="0 0 24 24" fill="none"><path d="M14 3v5h5" stroke="currentColor" stroke-width="1.5"/><path d="M6 3h8l5 5v13H6z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
       ${esc(a.filename)}</a>`).join('')+'</div>';
 }
@@ -755,12 +761,12 @@ function renderGallery(){
   const side=$('#gallerySide');
   side.innerHTML = imgs.length ? '' : '<div class="empty">No images yet. Your generations will appear here.</div>';
   imgs.slice(0,40).forEach(im=>{ const a=document.createElement('div'); a.className='gs';
-    a.innerHTML=`<img src="${im.url}" alt=""><span class="p">${esc(im.prompt)}</span>`;
+    a.innerHTML=`<img src="${esc(im.url)}" alt=""><span class="p">${esc(im.prompt)}</span>`;
     a.onclick=()=>showImage(im); side.appendChild(a); });
   const g=$('#galleryGrid');
   if(g){ g.innerHTML='';
     imgs.forEach(im=>{ const d=document.createElement('div'); d.className='gal';
-      d.innerHTML=`<img src="${im.url}" alt="${esc(im.prompt)}"><button class="del" aria-label="Delete image">
+      d.innerHTML=`<img src="${esc(im.url)}" alt="${esc(im.prompt)}"><button class="del" aria-label="Delete image">
         <svg viewBox="0 0 24 24" fill="none"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`;
       d.querySelector('img').onclick=()=>showImage(im);
       d.querySelector('.del').onclick=e=>{e.stopPropagation();delImage(im.id);};
@@ -780,8 +786,8 @@ function imageStageEmpty(){
 function showImage(im){
   const p=im.params||{};
   $('#imgStage').innerHTML=`<div class="wrap">
-    <img class="stage-img" src="${im.url}" alt="${esc(im.prompt)}">
-    <div class="stage-meta">${esc(im.prompt)}<br>${esc(im.model_id||'')} · ${p.width||'?'}×${p.height||'?'} · ${p.steps||'?'} steps</div>
+    <img class="stage-img" src="${esc(im.url)}" alt="${esc(im.prompt)}">
+    <div class="stage-meta">${esc(im.prompt)}<br>${esc(im.model_id||'')} · ${esc(p.width||'?')}×${esc(p.height||'?')} · ${esc(p.steps||'?')} steps</div>
     <div class="gallery" id="galleryGrid"></div></div>`;
   renderGallery(); $('#imgStage').scrollTop=0;
 }
@@ -859,7 +865,7 @@ function updateVidSend(){
   $('#vidGen').disabled = state.vidBusy || !ok || $('#vidModel').disabled;
 }
 async function loadVideoHistory(){ const d=await api('/api/video/history'); state.videos=d.videos; renderVideoGallery(); }
-function vidMedia(v){ return v.fmt==='mp4' ? `<video src="${v.url}" muted loop playsinline></video>` : `<img src="${v.url}" alt="">`; }
+function vidMedia(v){ return v.fmt==='mp4' ? `<video src="${esc(v.url)}" muted loop playsinline></video>` : `<img src="${esc(v.url)}" alt="">`; }
 function hoverPlay(el){ const v=el.querySelector('video'); if(v){ el.onmouseenter=()=>v.play().catch(()=>{}); el.onmouseleave=()=>v.pause(); } }
 function renderVideoGallery(){
   const vids=state.videos||[];
@@ -892,10 +898,10 @@ function videoStageEmpty(){
 function showVideo(v){
   const p=v.params||{};
   const player = v.fmt==='mp4'
-    ? `<video class="stage-vid" src="${v.url}" controls autoplay loop muted playsinline></video>`
-    : `<img class="stage-vid" src="${v.url}" alt="">`;
+    ? `<video class="stage-vid" src="${esc(v.url)}" controls autoplay loop muted playsinline></video>`
+    : `<img class="stage-vid" src="${esc(v.url)}" alt="">`;
   $('#vidStage').innerHTML=`<div class="wrap">${player}
-    <div class="stage-meta">${esc(v.prompt||'')}<br>${esc(v.model_id||'')} · ${p.frames||'?'} frames · ${p.fps||'?'} fps · ${p.steps||'?'} steps</div>
+    <div class="stage-meta">${esc(v.prompt||'')}<br>${esc(v.model_id||'')} · ${esc(p.frames||'?')} frames · ${esc(p.fps||'?')} fps · ${esc(p.steps||'?')} steps</div>
     <div class="gallery" id="vidGalleryGrid"></div></div>`;
   renderVideoGallery(); $('#vidStage').scrollTop=0;
 }

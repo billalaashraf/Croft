@@ -99,16 +99,22 @@ def _restrict(path: str, mode: int) -> None:
 def _connect() -> sqlite3.Connection:
     parent = os.path.dirname(os.path.abspath(_DB_PATH)) or "."
     os.makedirs(parent, exist_ok=True)
-    fresh = not os.path.exists(_DB_PATH)
     conn = sqlite3.connect(_DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    if fresh:
-        # Every message, every uploaded document's extracted text and every
-        # configured endpoint lives in this file. sqlite3 creates it 0644, so
-        # on a shared machine any other account could simply read the lot.
-        # Tighten it once, at creation, rather than on every connect.
-        _restrict(_DB_PATH, 0o600)
+    # Concurrent writers otherwise fail immediately with "database is locked".
+    # A fresh connection per call makes that easy to hit — two browser tabs are
+    # enough — and the write volume here is tiny, so waiting is free.
+    conn.execute("PRAGMA busy_timeout = 5000")
+    # Every message, every uploaded document's extracted text and every
+    # configured endpoint lives in this file. sqlite3 creates it 0644, so on a
+    # shared machine any other account could simply read the lot.
+    #
+    # Unconditional, not `if fresh:`. Doing this only at creation left every
+    # database made before the check existed at 0644 forever, with no way to
+    # notice — and docs/SECURITY.md stated 0600 as a fact. A chmod on a file we
+    # have already opened is one cheap syscall, and it repairs as well as sets.
+    _restrict(_DB_PATH, 0o600)
     return conn
 
 

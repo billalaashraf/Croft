@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from typing import Dict, Iterator, List, Optional
 
@@ -153,11 +154,79 @@ def unload() -> None:
         time.sleep(0.25)
 
 
+# ---------------------------------------------------------------------------
+# Endpoint validation
+# ---------------------------------------------------------------------------
+# An endpoint is not an innocent string. Every message in a conversation is
+# POSTed to it, and LLM_CHAT_API_KEY is attached as a bearer token — so a value
+# pointing at a host you do not control exfiltrates both the chat history and
+# the key. It also reaches anything the machine can reach: cloud metadata on
+# 169.254.169.254, a container-network neighbour, an intranet service.
+#
+# The default is therefore loopback-only. Reaching a model server on another
+# machine is a legitimate thing to want, so it is available — but as a
+# deliberate opt-in that has to be set in the environment, not as something the
+# settings API can turn on by itself.
+ALLOW_REMOTE = os.environ.get("LLM_ALLOW_REMOTE_ENDPOINT", "").strip() not in ("", "0")
+
+
+def validate_endpoint(url: str) -> str:
+    """Return `url` if it is safe to send chats and credentials to, else raise.
+
+    Resolution happens here, at validation time, and the result is checked —
+    a name that resolves into a private range is rejected on its address, not
+    on how it is spelled.
+    """
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+
+    u = urlparse((url or "").strip())
+    if u.scheme not in ("http", "https"):
+        raise ValueError("endpoint must start with http:// or https://")
+    if not u.hostname:
+        raise ValueError("endpoint has no host")
+    try:
+        infos = socket.getaddrinfo(u.hostname, u.port or
+                                   (443 if u.scheme == "https" else 80),
+                                   proto=socket.IPPROTO_TCP)
+    except socket.gaierror as exc:
+        raise ValueError(f"endpoint host does not resolve ({exc})") from exc
+
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if ip.is_loopback:
+            continue
+        if not ALLOW_REMOTE:
+            raise ValueError(
+                f"endpoint resolves to {ip}, which is not loopback. Croft sends "
+                "your conversation and LLM_CHAT_API_KEY to this address, so it "
+                "refuses non-local endpoints unless you set "
+                "LLM_ALLOW_REMOTE_ENDPOINT=1.")
+        # Even opted in, the addresses that exist to be reached accidentally
+        # stay refused: link-local carries cloud instance credentials.
+        if ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+            raise ValueError(f"endpoint resolves to {ip}, which is never a model server")
+    return url.strip()
+
+
 def _endpoint_for(model_id: str) -> Optional[str]:
-    """Configured base URL for a model: per-model setting, else global default."""
+    """Configured base URL for a model: per-model setting, else global default.
+
+    Re-validated on read as well as on write. A row can predate the check, be
+    edited in the database directly, or survive a downgrade — and this is the
+    last point before credentials go out over the wire.
+    """
     from webui import chatstore
-    return (chatstore.get_setting(f"endpoint:{model_id}")
-            or chatstore.get_setting("default_endpoint"))
+    raw = (chatstore.get_setting(f"endpoint:{model_id}")
+           or chatstore.get_setting("default_endpoint"))
+    if not raw:
+        return None
+    try:
+        return validate_endpoint(str(raw))
+    except ValueError as exc:
+        print(f"[inference] refusing stored endpoint {raw!r}: {exc}", file=sys.stderr)
+        return None
 
 
 def resolve_route(model_id: str) -> Dict[str, object]:
@@ -239,7 +308,11 @@ def _stream_openai(endpoint: str, model_id: str, messages: List[dict],
     api_key = os.environ.get("LLM_CHAT_API_KEY")
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-    with requests.post(url, json=payload, headers=headers, stream=True, timeout=300) as r:
+    # Redirects off. A validated loopback endpoint that answers 302 would
+    # otherwise relocate this request — bearer token and full conversation
+    # included — to a host the check never saw.
+    with requests.post(url, json=payload, headers=headers, stream=True,
+                       timeout=300, allow_redirects=False) as r:
         r.raise_for_status()
         for raw in r.iter_lines(decode_unicode=True):
             if not raw or not raw.startswith("data:"):

@@ -13,13 +13,16 @@ In scope — attacks the app is built to survive:
 
 | Threat | Defence |
 |---|---|
-| Another account on this machine reaching the app on `127.0.0.1` | A random access token, in a mode-0600 file only your user can read |
+| Another account on this machine reaching the app on `127.0.0.1` | A random access token, in a mode-0600 file only your user can read. It is printed as a URL only to an interactive terminal — never into a log file — and `webui.sh` sets `umask 077` so the logs are 0600 too |
+| A second listener being the weak half of the pair | The diffusion worker on :7862 enforces the same two gates as the app, from the same token file. It is not reachable without the token, and it refuses an unknown `Host` |
 | A web page you have open using **DNS rebinding** to reach the app from inside your browser | `Host` header allow-list; rebinding must present the attacker's own hostname |
 | A web page making a cross-site request that changes state (CSRF) | Mutating requests require a **custom header**, which needs a CORS preflight this app never answers. No CORS headers are sent, deliberately |
-| Another local user reading your chats, uploads or endpoints off disk | `chat.db` is 0600, `models/uploads/` is 0700, uploads are 0600 |
+| Another local user reading your chats, uploads or endpoints off disk | `chat.db` is 0600, `models/uploads/` is 0700, uploads are 0600, logs are 0600. These are re-applied on every start, so an install created before the rule existed is repaired rather than left as it was |
 | A tampered or truncated model download | SHA256 verified against the manifest for direct downloads; for HF snapshots, a commit SHA pinned in the manifest plus per-file ETag |
 | Weights changing under you between installs | Every `hf_repo` entry pins a `revision`. `main` moves and can be force-pushed; a pinned commit means two installs weeks apart fetch identical bytes, and the commit is recorded in `models/installed.json` |
-| A hostile value in an environment variable or a path becoming a shell command | No `eval`, no `os.system`, no `shell=True`; every subprocess takes an argv list |
+| A hostile value in an environment variable or a path becoming a shell command | No `eval`, no `os.system`, no `shell=True`; every subprocess takes an argv list, and the values that reach one are checked against a closed set |
+| Your conversations or `LLM_CHAT_API_KEY` being sent somewhere you did not choose | An inference endpoint must resolve to loopback. Anything else is refused unless you set `LLM_ALLOW_REMOTE_ENDPOINT=1`, and link-local addresses are refused even then. Redirects are disabled, so a 302 cannot relocate the request |
+| A downloaded weights file executing code when it loads | Every pipeline is loaded with `use_safetensors=True`. This is a format restriction, not a guarantee about the weights — see below |
 
 Out of scope — say so plainly rather than implying cover:
 
@@ -33,18 +36,30 @@ Out of scope — say so plainly rather than implying cover:
   upload goes into the model's context. The model has no tools here, so the
   blast radius is its own reply, but do not treat that reply as trusted.
 - **Multi-user or internet-facing deployment.** There are no user accounts, no
-  roles and no audit log. One token is one level of access: all of it.
+  roles and no audit log. One token is one level of access: all of it. Refused
+  requests are logged to stderr, which is enough to notice probing and not
+  enough to reconstruct what happened.
+- **Denial of service.** Generation parameters are bounded so a single request
+  cannot ask for an unbounded allocation, and uploads are capped as they stream.
+  Neither is rate limiting: anything holding the token can keep the accelerator
+  busy for as long as it likes.
 
 ## The access token
 
-Every `/api/*` route requires it. The token is:
+Every route requires it except `/` (the unlock page, which is static HTML) and
+`/healthz` (liveness, which reports only "ok" and a version). The list of public
+paths is `webui.app.PUBLIC_PATHS`, and a test walks the router to assert nothing
+else answers without a credential — the gate used to be "anything under `/api/`",
+which silently left `/manager` open. The token is:
 
 - read from `LLM_WEBUI_TOKEN` if set, otherwise generated once and written to
   `.webui_token` (mode 0600) beside the pidfile;
 - printed at startup as a ready-to-open URL —
-  `http://127.0.0.1:8090/#t=<token>`. It sits in the **fragment**, which
-  browsers never send to a server, so the secret reaches the page and stops
-  there;
+  `http://127.0.0.1:8090/#t=<token>` — **only when stdout is a terminal**. It
+  sits in the **fragment**, which browsers never send to a server, so the secret
+  reaches the page and stops there. Started by `webui.sh` or a service unit,
+  stdout is a log file, and printing it there copied the secret into a
+  world-readable file: get the link with `./webui.sh url` instead;
 - accepted in three ways, which are not equivalent:
 
 | Form | Accepted for |
@@ -110,9 +125,20 @@ file browser as well.
   `--dry-run` previews every action.
 - Gated models require you to confirm you have accepted the licence before any
   bytes move.
-- The Docker install script is downloaded to `/tmp/get-docker.sh` and you are
-  told where it is before it runs as root — instead of `curl | sh`, which gives
-  you no chance to look.
+- The Docker install script is downloaded to a `mktemp -d` directory (mode
+  0700) and you are told where it is before it runs as root — instead of
+  `curl | sh`, which gives you no chance to look. A fixed `/tmp` path would let
+  another local user swap the file during the confirmation prompt, which is a
+  race that ends in root.
+- `LLM_PKG_URL` requires `LLM_PKG_SHA256`. The archive is extracted and its
+  installer is executed, so an unverified one is remote code execution; the
+  bootstrap refuses rather than warning and continuing. The download is
+  restricted to `--proto '=https'`, and extraction uses `--no-same-owner
+  --no-same-permissions` so an archive cannot choose the mode of what it writes.
+- `requirements.lock` carries a hash for every artefact and is installed with
+  `pip --require-hashes`, so a substituted wheel fails rather than installing.
+- Joining the `docker` group is root-equivalent on the host; the bootstrap says
+  so and asks separately before doing it.
 - systemd units default to user scope. System scope asks first.
 - Store weights under a directory owned by the service user, mode 0750:
   `install -d -m 0750 -o "$USER" -g "$USER" models`. `HF_HOME` inherits it.

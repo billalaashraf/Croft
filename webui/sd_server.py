@@ -25,11 +25,12 @@ Env: LLM_SD_HOST (127.0.0.1), LLM_SD_PORT (7862).
 from __future__ import annotations
 
 import os
+import sys
 import threading
 from typing import Optional
 
 try:
-    from fastapi import FastAPI  # type: ignore
+    from fastapi import FastAPI, Request  # type: ignore
     from fastapi.responses import JSONResponse  # type: ignore
     from pydantic import BaseModel  # type: ignore
 except Exception as exc:  # pragma: no cover
@@ -38,9 +39,36 @@ except Exception as exc:  # pragma: no cover
 # Importing inference here is not an oversight: it registers the chat owner
 # with gpumem, so a job in this process can evict the model sitting in Ollama.
 # Without it the worker would only know how to free its own two pipelines.
-from webui import files, gpumem, imagegen, inference, videogen  # noqa: F401
+from webui import auth, files, gpumem, imagegen, inference, videogen  # noqa: F401
 
 app = FastAPI(title="Local diffusion worker")
+
+
+# ---------------------------------------------------------------------------
+# The same two gates the app uses, for the same two reasons.
+#
+# This process listens on its own port and used to accept anything that could
+# reach it. That made it the weak half of a pair: the app refused an unknown
+# `Host` specifically to defeat DNS rebinding, while a browser could rebind
+# onto this port and drive the accelerator with no credential at all. A second
+# listener needs a second copy of the guard, not an assumption that the first
+# one covers it.
+#
+# The token is read from the same file the app uses, so there is nothing to
+# configure — but if it cannot be read, the worker refuses to start rather than
+# serving openly.
+# ---------------------------------------------------------------------------
+@app.middleware("http")
+async def guard(request: Request, call_next):
+    if not auth.host_allowed(request.headers.get("host")):
+        return JSONResponse({"error": "unrecognised Host header"}, status_code=421)
+    reason = auth.authorize(request)
+    if reason:
+        print(f"[sdworker] auth refused: {request.method} {request.url.path} "
+              f"— {reason}", file=sys.stderr)
+        return JSONResponse({"error": reason, "unauthorized": True},
+                            status_code=401)
+    return await call_next(request)
 
 # One job at a time, and not merely to be polite about the GPU. FastAPI runs
 # these sync endpoints in a threadpool, so two jobs would share `_PIPES` and
@@ -79,9 +107,12 @@ def health() -> dict:
     the worker over HTTP, which inside the worker means asking itself: every
     /health spawns a nested /health until the threadpool is full and the process
     stops answering anything. Local checks only, on this endpoint.
+
+    `pid` is deliberately not reported. It told a caller which process to signal
+    and said something about the host, and the app has never needed it.
     """
     return {"ok": True, "deps": imagegen._deps_local(),
-            "device": imagegen._device_local(), "pid": os.getpid()}
+            "device": imagegen._device_local()}
 
 
 @app.post("/generate/image")

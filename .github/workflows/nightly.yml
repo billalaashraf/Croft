@@ -122,38 +122,88 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install the core requirements
+        # Needed only to import installer.recommend, so the built-in catalog's
+        # pins are checked alongside the manifest's. Five model ids exist only
+        # in DEFAULT_REVISIONS and would otherwise go unverified.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
       # A pin is only useful while it resolves. A repo that is deleted, renamed
       # or made private turns every install of that model into a 404, and there
       # is no way to notice from inside the codebase.
+      #
+      # Gated repos need credentials. Without them Hugging Face answers 401/403
+      # for *any* revision of a gated repo — existing or not — so treating that
+      # as success would let a bad pin sit here looking verified. Set an
+      # HF_TOKEN repository secret (read scope, with the model licences
+      # accepted on the account) to check those too; anything unverifiable is
+      # reported as such and fails the job rather than passing quietly.
       - name: Every pinned commit resolves on Hugging Face
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           python - <<'PY'
-          import json, sys, urllib.error, urllib.request
+          import json, os, sys, urllib.error, urllib.request
+          sys.path.insert(0, ".")
+          from installer import recommend as rec
 
-          failures = []
+          token = (os.environ.get("HF_TOKEN") or "").strip()
+          print(f"HF token: {'present' if token else 'ABSENT — gated repos cannot be checked'}\n")
+
+          # Every pin from both sources, deduplicated. The manifest wins where
+          # the two overlap; a disagreement is caught by the unit tests.
+          pins = {}
+          for m in rec.DEFAULT_CATALOG:
+              if not m.download_url and m.revision:
+                  pins[m.id] = (m.hf_repo, m.revision)
           for e in json.load(open("models_manifest.json"))["models"]:
-              repo, rev = e.get("hf_repo"), e.get("revision")
-              if not repo or e.get("download_url"):
-                  continue
-              url = f"https://huggingface.co/api/models/{repo}/revision/{rev}"
-              try:
-                  with urllib.request.urlopen(url, timeout=60) as r:
-                      json.load(r)
-                  print(f"ok   {e['id']:24} {repo}@{rev[:12]}")
-              except urllib.error.HTTPError as exc:
-                  # 401/403 is a gated repo answering "prove who you are", which
-                  # means the revision is there. Only 404 says it is gone.
-                  if exc.code in (401, 403):
-                      print(f"ok   {e['id']:24} {repo}@{rev[:12]} (gated)")
-                  else:
-                      failures.append(f"{e['id']}: {repo}@{rev} → HTTP {exc.code}")
-                      print(f"FAIL {e['id']:24} {repo}@{rev[:12]} HTTP {exc.code}")
-              except Exception as exc:
-                  failures.append(f"{e['id']}: {repo}@{rev} → {exc}")
-                  print(f"FAIL {e['id']:24} {exc}")
+              if e.get("hf_repo") and not e.get("download_url") and e.get("revision"):
+                  pins[e["id"]] = (e["hf_repo"], e["revision"])
 
-          if failures:
-              print("\nPinned revisions that no longer resolve:")
-              print("\n".join("  " + f for f in failures))
+          gone, unverified = [], []
+          for mid, (repo, rev) in sorted(pins.items()):
+              req = urllib.request.Request(
+                  f"https://huggingface.co/api/models/{repo}/revision/{rev}")
+              if token:
+                  req.add_header("Authorization", f"Bearer {token}")
+              try:
+                  with urllib.request.urlopen(req, timeout=60) as r:
+                      json.load(r)
+                  print(f"ok         {mid:24} {repo}@{rev[:12]}")
+              except urllib.error.HTTPError as exc:
+                  if exc.code == 404:
+                      gone.append(f"{mid}: {repo}@{rev} → 404, that commit is gone")
+                      print(f"GONE       {mid:24} {repo}@{rev[:12]} → 404")
+                  elif exc.code in (401, 403):
+                      # Says nothing about the revision — only that we cannot
+                      # look. Never count this as a pass.
+                      why = ("token lacks access, or its account has not "
+                             "accepted the licence") if token else \
+                            "no HF_TOKEN secret configured"
+                      unverified.append(
+                          f"{mid}: {repo}@{rev} → HTTP {exc.code} ({why})")
+                      print(f"UNVERIFIED {mid:24} {repo}@{rev[:12]} → HTTP {exc.code}")
+                  else:
+                      unverified.append(f"{mid}: {repo}@{rev} → HTTP {exc.code}")
+                      print(f"UNVERIFIED {mid:24} {repo}@{rev[:12]} → HTTP {exc.code}")
+              except Exception as exc:
+                  unverified.append(f"{mid}: {repo}@{rev} → {exc}")
+                  print(f"UNVERIFIED {mid:24} {exc}")
+
+          print(f"\n{len(pins)} pins checked: {len(pins) - len(gone) - len(unverified)} ok, "
+                f"{len(gone)} gone, {len(unverified)} unverified")
+
+          if gone:
+              print("\nPinned commits that no longer exist — repoint these:")
+              print("\n".join("  " + f for f in gone))
+          if unverified:
+              print("\nPins that could NOT be verified (not the same as valid):")
+              print("\n".join("  " + f for f in unverified))
+              print("\n  These are gated repos. Add a read-scoped HF_TOKEN")
+              print("  repository secret from an account that has accepted their")
+              print("  licences, so this job can check them.")
+          if gone or unverified:
               sys.exit(1)
           PY

@@ -17,6 +17,7 @@ Raw uploads are kept under <LLM_MODELS_DIR>/uploads for reference.
 from __future__ import annotations
 
 import os
+import traceback
 import uuid
 from typing import Optional, Tuple
 
@@ -43,6 +44,21 @@ def deps() -> dict:
     return {"pdf": has("pypdf"), "docx": has("docx")}
 
 
+def secure_upload_dir() -> None:
+    """Create UPLOAD_DIR if needed and make sure it is 0700.
+
+    Called at import as well as on every save. Doing it only inside
+    `save_upload` meant an install that had never uploaded anything kept
+    whatever mode the directory was created with — 0755 on a tree that predated
+    the hardening — while docs/SECURITY.md described it as 0700.
+    """
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    try:
+        os.chmod(UPLOAD_DIR, 0o700)
+    except OSError:
+        pass
+
+
 def save_upload(data: bytes, filename: str) -> str:
     """Write an upload under UPLOAD_DIR and return its path.
 
@@ -50,11 +66,7 @@ def save_upload(data: bytes, filename: str) -> str:
     later chmod() the file exists and is world-readable, and these are
     documents the user chose to hand to a *local* model.
     """
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
-    try:
-        os.chmod(UPLOAD_DIR, 0o700)
-    except OSError:
-        pass
+    secure_upload_dir()
     safe = os.path.basename(filename or "file")
     path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4().hex[:8]}_{safe}")
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -114,11 +126,22 @@ def extract_text(path: str, filename: str) -> Tuple[str, str, bool]:
                     return "", "binary", False   # not text we can trust
             kind = "text"
     except ModuleNotFoundError as exc:
+        # Actionable and safe to show: a package name, nothing about this host.
         return f"[cannot read {ext} — missing dependency: {exc.name}]", "error", False
-    except Exception as exc:  # pragma: no cover
-        return f"[could not extract text: {exc}]", "error", False
+    except Exception:  # pragma: no cover
+        # The parser's own message routinely embeds absolute paths and internal
+        # state, and this string is stored, shown, and fed to the model. Log the
+        # detail; hand back only the fact that it failed.
+        traceback.print_exc()
+        return f"[could not extract text from this {ext or 'file'}]", "error", False
 
     truncated = False
     if len(text) > MAX_CHARS:
         text, truncated = text[:MAX_CHARS], True
     return text, kind, truncated
+
+
+# Repair permissions at import, so a tree created before this check existed is
+# tightened the first time the app or the worker starts — not only once someone
+# happens to upload a file.
+secure_upload_dir()

@@ -24,12 +24,24 @@ import os
 import uuid
 from typing import Dict, List, Optional
 
-from webui import gpumem, sdclient
+from webui import gpumem, imagegen, sdclient
 
 MODELS_DIR = os.environ.get("LLM_MODELS_DIR", "models")
 OUT_DIR = os.path.join(MODELS_DIR, "sd-outputs")
 # SD1.5 base AnimateDiff rides on; overridable if you host it locally.
+#
+# Pinned to a commit for the same reason every manifest entry is: `main` moves,
+# and this one is fetched implicitly at first generation rather than through the
+# installer, so nothing else would ever record which weights were used. The
+# revision is the same commit models_manifest.json pins for `sd-1.5`.
 SD15_BASE = os.environ.get("LLM_ANIMATEDIFF_BASE", "runwayml/stable-diffusion-v1-5")
+SD15_REVISION = os.environ.get("LLM_ANIMATEDIFF_BASE_REVISION",
+                               "451f4fe16113bff5a5d2269ed5ad43b0592e9a14")
+# An override points somewhere unpinned by definition, so the pin only applies
+# to the default. Setting one is a deliberate act; silently pinning a different
+# repo to sd-1.5's commit would just fail confusingly.
+if os.environ.get("LLM_ANIMATEDIFF_BASE"):
+    SD15_REVISION = os.environ.get("LLM_ANIMATEDIFF_BASE_REVISION") or None
 
 _PIPES: Dict[str, object] = {}
 
@@ -192,9 +204,16 @@ def _txt2vid_pipe(model_id: str):
     adapter_path = meta.get("path", os.path.join(MODELS_DIR, model_id))
     dev = _device_local()
     dtype = _dtype()
-    adapter = MotionAdapter.from_pretrained(adapter_path, torch_dtype=dtype)
+    # use_safetensors=True on both, matching imagegen. Without it diffusers may
+    # fall back to a pickle-backed .bin, and unpickling a weights file executes
+    # whatever it contains. Croft cannot vouch for third-party weights, so the
+    # least it can do is refuse the format that runs code on load.
+    adapter = MotionAdapter.from_pretrained(adapter_path, torch_dtype=dtype,
+                                            use_safetensors=True)
     pipe = AnimateDiffPipeline.from_pretrained(SD15_BASE, motion_adapter=adapter,
-                                               torch_dtype=dtype)
+                                               torch_dtype=dtype,
+                                               use_safetensors=True,
+                                               revision=SD15_REVISION)
     pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config,
                                                beta_schedule="linear")
     pipe = pipe.to(dev)
@@ -214,6 +233,7 @@ def _img2vid_pipe(model_id: str):
     # `variant` stays cuda-only: a local checkout may hold only fp32 weight
     # files, and from_pretrained casts them to `dtype` on load either way.
     pipe = StableVideoDiffusionPipeline.from_pretrained(path, torch_dtype=_dtype(),
+                                                        use_safetensors=True,
                                                         variant="fp16" if dev == "cuda" else None)
     pipe = pipe.to(dev)
     gpumem.tune_pipeline(pipe, slice_attention=True)
@@ -249,9 +269,13 @@ def _generate_local(model_id: str, *, prompt: Optional[str] = None,
         raise RuntimeError(f"'{model_id}' is not an installed video model")
 
     d = default_params(model_id)
-    frames = int(frames or d["frames"])
-    fps = int(fps or d["fps"])
-    steps = int(steps or d["steps"])
+    # Bounded, not just coerced — see imagegen._bounded. A clip allocates
+    # frames × resolution of latents, so `frames` is the most expensive number
+    # a caller can send. The per-model `cap` check below is about what the model
+    # supports; this is about what the machine will survive being asked.
+    frames = imagegen._bounded(frames or d["frames"], 1, 256, "frames")
+    fps = imagegen._bounded(fps or d["fps"], 1, 60, "fps")
+    steps = imagegen._bounded(steps or d["steps"], 1, 150, "steps")
     vk = video_kind(model_id)
 
     # Check before loading anything: the alternative is a bare tensor-shape

@@ -449,8 +449,20 @@ never appears.
 python3 -m installer.main uninstall --model mistral-7b-q4   # removes weights (prompts)
 kill $(cat .webui.pid)                                      # stop the native web panel
 docker compose -f docker/docker-compose.yml down            # stop containers
-systemctl --user disable --now croft-text                   # remove service
+systemctl --user disable --now croft-text                   # stop and disable the service
 ```
+
+`disable --now` stops the unit and removes its autostart symlink, but leaves the
+unit file in place. To remove it completely:
+
+```bash
+systemctl --user disable --now croft-text
+rm ~/.config/systemd/user/croft-text.service
+systemctl --user daemon-reload
+```
+
+On macOS the equivalent is `launchctl unload
+~/Library/LaunchAgents/com.croft.manager.plist` followed by deleting that file.
 
 ## Testing
 

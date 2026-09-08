@@ -139,6 +139,41 @@ DEFAULT_CATALOG: List[ModelEntry] = [
                "native", "Motion module for SD1.5 text2video"),
 ]
 
+# Immutable commit SHAs for every entry above.
+#
+# models_manifest.json pins its own entries, but the manifest does not name
+# every id in this catalog — `qwen2.5-3b-q4`, `llama3.2-3b-q4`,
+# `mistral-7b-gptq`, `qwen2.5-32b-gptq` and `controlnet-sdxl` exist only here.
+# Without a pin those fell through to `main`, which moves and can be
+# force-pushed, so repeated installs of the same id could fetch different
+# weights with nothing to indicate it.
+#
+# Kept as a table rather than a constructor argument for two reasons: the
+# entries above are already dense with positional fields, and a table can be
+# checked for completeness — `test_recommend_catalog.py` fails if any snapshot
+# entry is missing from it, so a new model cannot be added unpinned.
+DEFAULT_REVISIONS: Dict[str, str] = {
+    "qwen2.5-3b-q4":       "7dabda4d13d513e3e842b20f0d435c732f172cbe",
+    "llama3.2-3b-q4":      "5ab33fa94d1d04e903623ae72c95d1696f09f9e8",
+    "mistral-7b-q4":       "3a6fbf4a41a1d52e415a4958cde6856d34b2db93",
+    "qwen2.5-7b-q4":       "bb5d59e06d9551d752d08b292a50eb208b07ab1f",
+    "mistral-7b-gptq":     "7532d6bc89ef9300fb39d2d94ed4414ec534b72a",
+    "llama3.1-8b-fp16":    "0e9e39f249a16976918f6564b8830bc894c89659",
+    "mixtral-8x7b-gptq":   "0f81ba4680ccd2bce163334b93305d40b9e27b09",
+    "qwen2.5-32b-gptq":    "c83e67dfb2664f5039fd4cd99e206799e27dd800",
+    "llama3.3-70b-q4":     "b6c5c9f176f3279204034e1d16d393105e95cb88",
+    "sd-1.5":              "451f4fe16113bff5a5d2269ed5ad43b0592e9a14",
+    "sdxl-1.0":            "462165984030d82259a11f4367a4eed129e94a7b",
+    "sdxl-turbo":          "71153311d3dbb46851df1931d3ca6e939de83304",
+    "controlnet-sdxl":     "eb115a19a10d14909256db740ed109532ab1483c",
+    "svd-xt":              "9e43909513c6714f1bc78bcb44d96e733cd242aa",
+    "animatediff-sd15":    "6167b88ffe39b4441fdf2113e77b99a6f56b7906",
+}
+
+for _entry in DEFAULT_CATALOG:
+    _entry.revision = DEFAULT_REVISIONS.get(_entry.id)
+del _entry
+
 
 def load_manifest(path: str = "models_manifest.json") -> List[ModelEntry]:
     """Merge models_manifest.json entries into the default catalog (by id)."""
@@ -172,7 +207,11 @@ def load_manifest(path: str = "models_manifest.json") -> List[ModelEntry]:
                     download_url=e.get("download_url"),
                     integrity_sha256=e.get("integrity_sha256"),
                     hf_allow_patterns=patterns,
-                    revision=e.get("revision"),
+                    # Falling back to the built-in pin matters: a manifest entry
+                    # that omits `revision` would otherwise replace a pinned
+                    # default with None and quietly reopen the `main` hole.
+                    revision=(e.get("revision")
+                              or DEFAULT_REVISIONS.get(e["id"])),
                 )
         except Exception as exc:
             # Falling back to the built-in catalog is right — a bad manifest

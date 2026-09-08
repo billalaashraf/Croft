@@ -6,7 +6,12 @@
 models/
 third_party/
 
-# Weight / checkpoint formats, wherever they land
+# Weight / checkpoint formats, wherever they land.
+#
+# `models/` above covers the default location, but LLM_MODELS_DIR is
+# configurable — point it at `weights/` and the directory rule stops applying.
+# These extension rules are the second net, so a stray multi-gigabyte checkpoint
+# cannot be committed from wherever it happens to sit.
 *.gguf
 *.safetensors
 *.ckpt
@@ -15,6 +20,14 @@ third_party/
 *.onnx
 *.h5
 *.msgpack
+# The standard non-safetensors formats. `pytorch_model.bin` and
+# `diffusion_pytorch_model.bin` are what diffusers and transformers write when a
+# repo has no safetensors — the exact files webui loads with use_safetensors=True
+# to avoid, and the ones most likely to be large and accidental.
+*.bin
+*.pkl
+*.npz
+*.tflite
 
 # Generated images and video
 sd-outputs/
@@ -44,6 +57,10 @@ uploads/
 # ---------------------------------------------------------------------------
 .venv/
 venv/
+env/
+ENV/
+.python-version
+.direnv/
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -52,6 +69,8 @@ dist/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.tox/
+.nox/
 .coverage
 htmlcov/
 
@@ -80,3 +99,19 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+*~
+
+# Merge and patch leftovers. These carry whole copies of a file under a name
+# nobody reviews, which is how a secret removed in one place survives in another.
+*.orig
+*.rej
+*.bak
+
+# ---------------------------------------------------------------------------
+# Local tooling output
+# ---------------------------------------------------------------------------
+# Review and scan reports written into the working tree. They quote source,
+# paths and sometimes findings that are not public yet.
+*_review.md
+*_audit.md
+.coderabbit/

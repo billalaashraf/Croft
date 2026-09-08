@@ -22,6 +22,7 @@ import contextlib
 import json
 import os
 import sys
+import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -45,12 +46,24 @@ async def lifespan(_app):
 
     The token rides in the fragment, and fragments are never sent to a server —
     so it reaches the page and goes no further, even though it is in a link.
+
+    It is only printed to an interactive terminal. `webui.sh` and the service
+    units start this process with stdout redirected to a log file, and printing
+    the token there copied a mode-0600 secret into a file created under the
+    caller's umask — 0644 on a default install. That handed the token to every
+    account on the machine, which is precisely the threat the token exists to
+    stop. Off a TTY, print where the token lives instead of what it is.
     """
     host = os.environ.get("LLM_WEBUI_HOST", "127.0.0.1")
     port = os.environ.get("LLM_WEBUI_PORT", "8090")
     shown = "127.0.0.1" if host in ("0.0.0.0", "::", "*") else host
-    print(f"[webui] open: http://{shown}:{port}/#t={auth.get_token()}")
-    print(f"[webui] token file: {auth.TOKEN_FILE} (mode 0600)")
+    if sys.stdout.isatty():
+        print(f"[webui] open: http://{shown}:{port}/#t={auth.get_token()}")
+    else:
+        auth.get_token()          # still mint it, just do not log it
+        print(f"[webui] listening on http://{shown}:{port}")
+        print(f"[webui] access token is in {auth.TOKEN_FILE} (mode 0600). "
+              f"Get the ready-to-open URL with: ./webui.sh url")
     yield
 
 
@@ -60,13 +73,25 @@ _STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
 
 # ---------------------------------------------------------------------------
-# Gate every request: Host allow-list first, then the access token on /api.
+# Gate every request: Host allow-list first, then the access token.
 #
 # One middleware rather than two, because the order is load-bearing — a
 # rebinding attempt must be refused before anything looks at its credentials —
 # and a single function makes that order impossible to get wrong later. See
 # webui/auth.py for what each gate actually stops.
 # ---------------------------------------------------------------------------
+
+# Deny by default. This was once an allow-list of one prefix, `/api/`, which
+# meant a route was protected only if it happened to be mounted under it —
+# and `/manager`, which renders the whole hardware report and model inventory,
+# was not. Naming the handful of public paths instead makes adding an
+# unprotected route a deliberate act rather than an oversight.
+PUBLIC_PATHS = frozenset({
+    "/",          # the SPA shell: static HTML with no data in it
+    "/healthz",   # liveness for container healthchecks, which hold no secret
+})
+
+
 @app.middleware("http")
 async def guard(request: Request, call_next):
     if not auth.host_allowed(request.headers.get("host")):
@@ -75,9 +100,14 @@ async def guard(request: Request, call_next):
                       "request. Reach the app on localhost, or list the "
                       "hostname in LLM_WEBUI_ALLOWED_HOSTS."},
             status_code=421)
-    if request.url.path.startswith("/api/"):
+    path = request.url.path
+    if path not in PUBLIC_PATHS and not path.startswith("/static/"):
         reason = auth.authorize(request)
         if reason:
+            # Logged, not returned in detail: a failure is the only signal that
+            # someone is probing, and there is otherwise no record at all.
+            print(f"[webui] auth refused: {request.method} {path} — {reason}",
+                  file=sys.stderr)
             return JSONResponse({"error": reason, "unauthorized": True},
                                 status_code=401)
     return await call_next(request)
@@ -309,11 +339,19 @@ async def api_chat(cid: str, request: Request):
 # ---------------------------------------------------------------------------
 @app.post("/api/attach")
 async def api_attach(file: UploadFile = File(...)) -> JSONResponse:
-    data = await file.read()
-    if len(data) > files.MAX_BYTES:
-        return JSONResponse(
-            {"error": f"file too large (> {files.MAX_BYTES // 1024 // 1024} MB)"},
-            status_code=413)
+    # Read in chunks and stop at the limit. `await file.read()` pulled the whole
+    # body in first and measured it afterwards, so the cap described the file we
+    # had already spooled to disk and loaded into memory — it bounded the error
+    # message, not the resource use.
+    chunks, size = [], 0
+    while chunk := await file.read(1 << 20):
+        size += len(chunk)
+        if size > files.MAX_BYTES:
+            return JSONResponse(
+                {"error": f"file too large (> {files.MAX_BYTES // 1024 // 1024} MB)"},
+                status_code=413)
+        chunks.append(chunk)
+    data = b"".join(chunks)
     path = files.save_upload(data, file.filename or "file")
     text, kind, truncated = files.extract_text(path, file.filename or "file")
     row = chatstore.add_attachment(None, file.filename or "file", path, kind,
@@ -330,7 +368,11 @@ async def api_attach(file: UploadFile = File(...)) -> JSONResponse:
 @app.get("/api/attachment/{aid}/file")
 def api_attachment_file(aid: str):
     a = chatstore.get_attachment(aid)
-    if not a or not a.get("path") or not os.path.exists(a["path"]):
+    # `is_within_uploads` rather than a bare existence check, matching the video
+    # source path below. The stored path is written server-side today, so a
+    # traversal is not reachable — but "the value in this column is trustworthy"
+    # is an assumption, and resolving it costs one syscall.
+    if not a or not files.is_within_uploads(a.get("path")):
         return JSONResponse({"error": "not found"}, status_code=404)
     return FileResponse(a["path"], filename=a["filename"])
 
@@ -349,6 +391,16 @@ async def api_set_settings(request: Request) -> JSONResponse:
     for key, value in body.items():
         if value in (None, ""):
             continue
+        # Endpoint keys are the ones with teeth: whatever is stored here
+        # receives every future message and the bearer token from
+        # LLM_CHAT_API_KEY. Validated on the way in as well as on the way out,
+        # so a bad value is rejected with an explanation the user can act on
+        # rather than silently ignored later.
+        if key == "default_endpoint" or key.startswith("endpoint:"):
+            try:
+                value = inference.validate_endpoint(str(value))
+            except ValueError as exc:
+                return JSONResponse({"error": f"{key}: {exc}"}, status_code=400)
         chatstore.set_setting(key, value)
     return JSONResponse(chatstore.all_settings())
 
@@ -383,8 +435,16 @@ async def api_image_generate(request: Request) -> JSONResponse:
                 steps=body.get("steps"), width=body.get("width"),
                 height=body.get("height"), guidance=body.get("guidance"),
                 seed=body.get("seed")))
-    except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=500)
+    except ValueError as exc:
+        # Bad parameters are the user's to fix, so they get the reason.
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except Exception:
+        # Anything else is ours. A library traceback carries absolute paths and
+        # model layout, so it goes to the log and the client gets a pointer.
+        traceback.print_exc()
+        return JSONResponse(
+            {"error": "image generation failed — see the server log for detail"},
+            status_code=500)
     rec_row = chatstore.add_image(model_id, prompt, body.get("negative_prompt"),
                                   res["params"], res["path"])
     return JSONResponse({"image": _image_public(rec_row)})
@@ -456,8 +516,13 @@ async def api_video_generate(request: Request) -> JSONResponse:
             lambda: videogen.generate(
                 model_id, prompt=(body.get("prompt") or None), source_image=source,
                 frames=body.get("frames"), fps=body.get("fps"), steps=body.get("steps")))
-    except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=500)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except Exception:
+        traceback.print_exc()
+        return JSONResponse(
+            {"error": "video generation failed — see the server log for detail"},
+            status_code=500)
     row = chatstore.add_video(model_id, body.get("prompt"), res["params"],
                               res["path"], res["fmt"])
     return JSONResponse({"video": _video_public(row)})
@@ -514,10 +579,25 @@ def api_status() -> JSONResponse:
                          "docker": runtime.docker_status()})
 
 
+# The services this endpoint may name. `action` was already checked against a
+# closed set; `service` went straight into the compose argv, where a value
+# beginning with `-` is read as a flag rather than a service name. There is no
+# shell involved, so this is argument injection rather than command injection —
+# but the fix is the same closed set the sibling parameter already had.
+COMPOSE_SERVICES = frozenset({
+    "text-tgi", "text-llamacpp", "text-webui", "sd-webui",
+    "manager", "manager-privileged",
+})
+
+
 @app.post("/api/service/{action}/{service}")
 def api_service(action: str, service: str) -> JSONResponse:
     if action not in ("up", "down"):
         return JSONResponse({"error": "action must be up|down"}, status_code=400)
+    if service not in COMPOSE_SERVICES:
+        return JSONResponse(
+            {"error": f"unknown service {service!r}",
+             "services": sorted(COMPOSE_SERVICES)}, status_code=400)
     rc = runtime.docker_up(service) if action == "up" else runtime.docker_down()
     return JSONResponse({"ok": rc == 0, "action": action, "service": service})
 

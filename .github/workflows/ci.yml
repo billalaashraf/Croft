@@ -143,6 +143,8 @@ jobs:
         # install is a broken install for every new user.
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.lock
+          # --require-hashes, or the hashes in the file are decoration: without
+          # it pip accepts whatever the index serves for each pinned version.
+          pip install --require-hashes -r requirements.lock
           python -c "import fastapi, huggingface_hub, requests, rich; print('ok')"
           pip check
